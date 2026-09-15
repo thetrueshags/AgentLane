@@ -1,0 +1,104 @@
+{
+  "agents": 4,
+  "seed": 1,
+  "H1_overlap_violations": 0,
+  "max_live_claims_seen": 4,
+  "board_commits": 71,
+  "tasks_by_status": {
+    "done": 16,
+    "open": 1
+  },
+  "H2_expired_claims": 1,
+  "crashed_with_claim": 1,
+  "H3_bad_landings": 2,
+  "H3_ci_gate_failed": 4,
+  "H3_reverted_ok": 3,
+  "H3_revert_failed": 1,
+  "H5_unexplained_main_commits": [],
+  "lost_work_tasks": [],
+  "take_ok": 17,
+  "take_conflict": 7,
+  "take_refused_holding": 0,
+  "take_error": 0,
+  "land_ok": 16,
+  "land_failed": 0,
+  "branch_push_ok": 21,
+  "branch_push_refused": 0,
+  "ci_gate_runs": 22,
+  "latency_take_s": {
+    "n": 24,
+    "p50": 0.53,
+    "p95": 1.0,
+    "max": 1.31
+  },
+  "latency_done_s": {
+    "n": 16,
+    "p50": 0.8,
+    "p95": 1.2,
+    "max": 1.27
+  },
+  "latency_heartbeat_s": {
+    "n": 28,
+    "p50": 0.23,
+    "p95": 0.67,
+    "max": 0.89
+  },
+  "land_retries": {
+    "n": 16,
+    "p50": 0.0,
+    "p95": 1,
+    "max": 1
+  },
+  "main_commits": 42,
+  "board_repo_size": [
+    "size-pack: 0 bytes"
+  ],
+  "agent_crashed_unexpectedly": 0,
+  "agent_finished": 4,
+  "notable_events": [
+    {
+      "kind": "reverted",
+      "sha": "03b4c20c8331781650fa88924999bf7701b63aae",
+      "ok": false,
+      "task": {},
+      "t": 1789469402.932
+    },
+    {
+      "kind": "crash",
+      "member": "agent00",
+      "task": "69f2f4",
+      "branch": "claim/69f2f4-agent00-task-6",
+      "t": 1789469403.224
+    },
+    {
+      "kind": "reverted",
+      "sha": "7a496ef3085838dca4f87a286dcb8554b549e719",
+      "ok": true,
+      "task": null,
+      "t": 1789469405.739
+    },
+    {
+      "kind": "reverted",
+      "sha": "d863e3cfc2462f08ee864d331567232ecefc33c8",
+      "ok": true,
+      "task": null,
+      "t": 1789469408.245
+    },
+    {
+      "kind": "expired",
+      "owner": "agent00",
+      "reason": "no heartbeat for 0 minutes",
+      "task": "69f2f4",
+      "t": 1789469412.59
+    },
+    {
+      "kind": "reverted",
+      "sha": "badc06f5f69e74113d3e38fc36b31f17e80b53d8",
+      "ok": true,
+      "task": null,
+      "t": 1789469417.138
+    }
+  ],
+  "timed_out": false,
+  "elapsed_seconds": 31.5
+}

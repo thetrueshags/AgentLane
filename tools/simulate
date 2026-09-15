@@ -1,0 +1,416 @@
+#!/usr/bin/env python3
+"""Simulate a team of synthetic agents using the board against a real git origin, with faults.
+
+Agents run as threads, each in its own clone, doing take / edit / commit / push / done loops.
+Faults: crashes mid-claim, landings that pass the local gate but fail the main gate, hot-path
+edits, stacked claims. A CI thread plays the two GitHub workflows (expire, main gate, revert).
+At the end the whole board history and main history are checked against the invariants.
+
+    python3 tools/simulate --agents 6 --tasks-per-agent 6 --seed 1
+"""
+import argparse
+import collections
+import importlib.machinery
+import importlib.util
+import json
+import os
+import random
+import shutil
+import statistics
+import subprocess
+import sys
+import threading
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+sys.path.insert(0, ROOT)
+from tests.test_board import BOARD, Fixture, sh  # noqa: E402
+
+
+def load_board_module():
+    loader = importlib.machinery.SourceFileLoader("boardmod", BOARD)
+    spec = importlib.util.spec_from_loader("boardmod", loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+
+SIM_GATE = """#!/usr/bin/env bash
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+if [ "${SIM_CI:-}" = "1" ]; then
+  if grep -rl "BROKEN" src 2>/dev/null | grep -q .; then
+    echo "main gate: BROKEN marker present"; exit 1
+  fi
+fi
+sleep "${SIM_GATE_SECONDS:-0}"
+echo "gate passed"
+"""
+
+
+class Stats:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.counts = collections.Counter()
+        self.latency = collections.defaultdict(list)
+        self.events = []
+
+    def bump(self, key, n=1):
+        with self.lock:
+            self.counts[key] += n
+
+    def timed(self, key, seconds):
+        with self.lock:
+            self.latency[key].append(seconds)
+
+    def log(self, **e):
+        e["t"] = round(time.time(), 3)
+        with self.lock:
+            self.events.append(e)
+
+
+class Sim:
+    def __init__(self, args):
+        self.args = args
+        self.rng = random.Random(args.seed)
+        self.stats = Stats()
+        self.fx = Fixture()
+        self.stop = threading.Event()
+        self.prepare_seed()
+        self.modules = ["src/mod%02d/**" % i for i in range(args.modules)]
+        self.docs = ["docs/part%02d/**" % i for i in range(max(2, args.modules // 3))]
+        self.m = load_board_module()
+
+    def prepare_seed(self):
+        seed = os.path.join(self.fx.tmp, "seed2")
+        sh(["git", "clone", "-q", self.fx.origin, seed], self.fx.tmp)
+        cfg_path = os.path.join(seed, ".harness", "config.json")
+        cfg = json.load(open(cfg_path))
+        cfg.update({"ttl_minutes": 1, "max_extensions": 1, "hot_ttl_minutes": 1,
+                    "stall_minutes": 0.05, "stall_release_minutes": self.args.stall_release_minutes,
+                    "hot_paths": ["shared/config.json"], "push_retries": 12, "land_retries": 8,
+                    "heartbeat_min_seconds": 2})
+        json.dump(cfg, open(cfg_path, "w"), indent=2)
+        with open(os.path.join(seed, ".harness", "gate", "code.sh"), "w") as f:
+            f.write(SIM_GATE)
+        os.makedirs(os.path.join(seed, "shared"), exist_ok=True)
+        with open(os.path.join(seed, "shared", "config.json"), "w") as f:
+            f.write("{}\n")
+        sh(["git", "add", "-A"], seed)
+        sh(["git", "commit", "-q", "-m", "sim config"], seed)
+        sh(["git", "push", "-q", "origin", "main"], seed)
+        self.fx.clones["seed2"] = seed
+        self.fx.board("seed2", "init")
+
+    def board(self, member, *a, check=False, env=None):
+        t0 = time.time()
+        p = self.fx.board(member, *a, check=check, extra_env=env)
+        self.stats.timed(a[0], time.time() - t0)
+        text = p.stdout.strip()
+        data = {}
+        if text:
+            try:
+                data = json.loads(text)
+            except ValueError:
+                try:
+                    data = json.loads(text.split("\n")[-1])
+                except ValueError:
+                    data = {"raw": text[-500:]}
+        return p.returncode, data, p.stderr
+
+    def agent(self, name):
+        try:
+            self.agent_loop(name)
+        except Exception as e:
+            self.stats.bump("agent_crashed_unexpectedly")
+            self.stats.log(kind="agent_exception", member=name, error=str(e)[-400:])
+
+    def agent_loop(self, name):
+        clone = self.fx.clone(name)
+        self.fx.board(name, "join", "--name", name, "--agent", "sim")
+        self.fx.board(name, "install", "--name", name, "--agent", "sim")
+        done = 0
+        attempts = 0
+        while done < self.args.tasks_per_agent and not self.stop.is_set() and attempts < self.args.tasks_per_agent * 6:
+            attempts += 1
+            roll = self.rng.random()
+            hot = roll < self.args.hot_rate
+            docs = (not hot) and roll < self.args.hot_rate + self.args.docs_rate
+            if hot:
+                globs = ["shared/config.json"]
+            elif docs:
+                globs = [self.rng.choice(self.docs)]
+            else:
+                globs = [self.rng.choice(self.modules)]
+            title = "%s task %d" % (name, attempts)
+            argv = ["take", "--new", title, "--globs", ",".join(globs)] + (["--hot"] if hot else [])
+            rc, data, err = self.board(name, *argv)
+            if rc != 0:
+                if data.get("conflict"):
+                    self.stats.bump("take_conflict")
+                elif "hold" in data.get("error", ""):
+                    self.stats.bump("take_refused_holding")
+                    self.recover(name, clone)
+                else:
+                    self.stats.bump("take_error")
+                    self.stats.log(kind="take_error", member=name, error=data.get("error"), stderr=err[-300:])
+                time.sleep(self.rng.uniform(0.1, 0.5))
+                continue
+            self.stats.bump("take_ok")
+            task = data["task"]
+            claim = data["claim"]
+            crash = self.rng.random() < self.args.crash_rate
+            bad = (not docs and not hot) and self.rng.random() < self.args.bad_landing_rate
+            commits = self.rng.randint(1, 3)
+            for i in range(commits):
+                self.edit(clone, globs[0], task["id"], i, broken=(bad and i == commits - 1))
+                sh(["git", "add", "-A"], clone)
+                sh(["git", "commit", "-q", "-m", "%s step %d" % (task["id"], i)], clone)
+                if self.rng.random() < 0.5:
+                    p = sh(["git", "push", "-q", "-u", "origin", "HEAD"], clone, check=False, env={"BOARD_MEMBER": name})
+                    self.stats.bump("branch_push_ok" if p.returncode == 0 else "branch_push_refused")
+                if self.rng.random() < 0.7:
+                    self.board(name, "heartbeat", "--quiet", *(["--force"] if self.args.force_heartbeats else []))
+                time.sleep(self.rng.uniform(0.05, 0.3))
+            if self.rng.random() < self.args.note_rate:
+                self.board(name, "note", "found something in %s" % globs[0], "--kind", "finding")
+            if crash:
+                self.stats.bump("crashed_with_claim")
+                self.stats.log(kind="crash", member=name, task=task["id"], branch=claim["branch"])
+                self.abandon(clone)
+                return
+            rc, data, err = self.board(name, "done")
+            if rc == 0:
+                done += 1
+                self.stats.bump("land_ok")
+                self.stats.bump("land_bad_marker" if bad else "land_clean")
+                retries = len(data.get("log", [])) - 1
+                self.stats.timed("land_retries", retries)
+                self.stats.log(kind="landed", member=name, task=task["id"], bad=bad, retries=retries,
+                               sha=data["landed"]["after"])
+            else:
+                self.stats.bump("land_failed")
+                self.stats.log(kind="land_failed", member=name, task=task["id"], error=data.get("error", "")[:200])
+                self.recover(name, clone)
+        self.stats.bump("agent_finished")
+
+    def edit(self, clone, glob, task_id, i, broken=False):
+        base = glob[:-3] if glob.endswith("/**") else glob
+        if glob.endswith("/**"):
+            os.makedirs(os.path.join(clone, base), exist_ok=True)
+            path = os.path.join(clone, base, "%s_%d.txt" % (task_id, i))
+            content = "task %s step %d%s\n" % (task_id, i, " BROKEN" if broken else "")
+        else:
+            path = os.path.join(clone, base)
+            try:
+                cur = json.load(open(path))
+            except (ValueError, FileNotFoundError):
+                cur = {}
+            cur[task_id] = i
+            content = json.dumps(cur, indent=1) + "\n"
+        with open(path, "w") as f:
+            f.write(content)
+
+    def abandon(self, clone):
+        sh(["git", "fetch", "-q", "origin"], clone, check=False)
+        sh(["git", "checkout", "-q", "--detach", "origin/main"], clone, check=False)
+
+    def recover(self, name, clone):
+        self.board(name, "release")
+        self.abandon(clone)
+
+    def ci(self):
+        clone = os.path.join(self.fx.tmp, "ci")
+        sh(["git", "clone", "-q", self.fx.origin, clone], self.fx.tmp)
+        self.fx.clones["ci"] = clone
+        seen = sh(["git", "rev-parse", "origin/main"], clone).stdout.strip()
+        last_expire = 0
+        while not self.stop.is_set():
+            time.sleep(self.args.ci_poll_seconds)
+            if time.time() - last_expire > self.args.expire_every_seconds:
+                rc, data, _ = self.board("ci", "expire", env={"BOARD_MEMBER": "board"})
+                if rc == 0 and isinstance(data, list) and data:
+                    self.stats.bump("expired_claims", len(data))
+                    for d in data:
+                        self.stats.log(kind="expired", **d)
+                last_expire = time.time()
+            sh(["git", "fetch", "-q", "origin", "main"], clone, check=False)
+            head = sh(["git", "rev-parse", "origin/main"], clone).stdout.strip()
+            if head == seen:
+                continue
+            p = sh(["git", "rev-list", "--reverse", "%s..%s" % (seen, head)], clone)
+            shas = [s for s in p.stdout.split() if s]
+            prev = seen
+            for sha in shas:
+                sh(["git", "checkout", "-q", "--detach", sha], clone)
+                gate = sh(["python3", BOARD, "gate", "--all"], clone, check=False,
+                          env={"SIM_CI": "1", "BOARD_MEMBER": "board"})
+                self.stats.bump("ci_gate_runs")
+                if gate.returncode != 0:
+                    self.stats.bump("ci_gate_failed")
+                    rc, data, err = self.board("ci", "revert-failed", prev, sha, "--check-base", "--reason", "sim main gate",
+                                               env={"BOARD_MEMBER": "board", "SIM_CI": "1"})
+                    if rc == 0 and isinstance(data, dict) and data.get("skipped"):
+                        self.stats.bump("revert_skipped_base_red")
+                    else:
+                        self.stats.bump("reverted_ok" if rc == 0 else "revert_failed")
+                    self.stats.log(kind="reverted", sha=sha, ok=rc == 0, task=(data or {}).get("task", {}) and data["task"].get("id"))
+                    sh(["git", "fetch", "-q", "origin", "main"], clone, check=False)
+                    head = sh(["git", "rev-parse", "origin/main"], clone).stdout.strip()
+                    break
+                prev = sha
+            seen = head
+
+    def run(self):
+        names = ["agent%02d" % i for i in range(self.args.agents)]
+        t0 = time.time()
+        ci_thread = threading.Thread(target=self.ci, daemon=True)
+        ci_thread.start()
+        threads = [threading.Thread(target=self.agent, args=(n,), daemon=True) for n in names]
+        for t in threads:
+            t.start()
+            time.sleep(0.2)
+        deadline = time.time() + self.args.max_seconds
+        while any(t.is_alive() for t in threads) and time.time() < deadline:
+            time.sleep(1)
+        timed_out = any(t.is_alive() for t in threads)
+        time.sleep(self.args.ci_poll_seconds * 2 + 1)
+        self.stop.set()
+        ci_thread.join(timeout=30)
+        elapsed = time.time() - t0
+        report = self.check_invariants()
+        report["timed_out"] = timed_out
+        report["elapsed_seconds"] = round(elapsed, 1)
+        return report
+
+    def check_invariants(self):
+        clone = os.path.join(self.fx.tmp, "audit")
+        sh(["git", "clone", "-q", self.fx.origin, clone], self.fx.tmp)
+        sh(["git", "fetch", "-q", "origin", "board:board"], clone)
+        commits = sh(["git", "rev-list", "--reverse", "board"], clone).stdout.split()
+        overlap_violations = 0
+        max_live = 0
+        for sha in commits:
+            names = sh(["git", "ls-tree", "--name-only", sha, "claims/"], clone).stdout.split()
+            claims = []
+            for n in names:
+                if n.endswith(".json"):
+                    claims.append(json.loads(sh(["git", "show", "%s:%s" % (sha, n)], clone).stdout))
+            max_live = max(max_live, len(claims))
+            for i in range(len(claims)):
+                for j in range(i + 1, len(claims)):
+                    if claims[i]["owner"] != claims[j]["owner"] and self.m.any_overlap(claims[i]["globs"], claims[j]["globs"]):
+                        overlap_violations += 1
+        tasks = []
+        for n in sh(["git", "ls-tree", "--name-only", "board", "tasks/"], clone).stdout.split():
+            if n.endswith(".json"):
+                tasks.append(json.loads(sh(["git", "show", "board:%s" % n], clone).stdout))
+        main_commits = sh(["git", "rev-list", "origin/main"], clone).stdout.split()
+        landed_shas = {l["after"] for t in tasks for l in (t.get("landed") or [])}
+        subjects = sh(["git", "log", "--format=%H %s", "origin/main"], clone).stdout.split("\n")
+        seed_shas = set(sh(["git", "rev-list", "origin/main", "--grep", "^seed$", "--grep", "^sim config$"], clone).stdout.split())
+        unexplained = []
+        for line in subjects:
+            if not line.strip():
+                continue
+            sha, subj = line.split(" ", 1)
+            if sha in seed_shas or subj.startswith("Revert"):
+                continue
+            ancestors_landed = sh(["git", "rev-list", "--ancestry-path", "%s..origin/main" % sha], clone).stdout.split()
+            if sha in landed_shas or any(a in landed_shas for a in ancestors_landed):
+                continue
+            unexplained.append((sha[:8], subj))
+        final_files = set(sh(["git", "ls-tree", "-r", "--name-only", "origin/main"], clone).stdout.split())
+        lost = []
+        for t in tasks:
+            if t["status"] == "done" and not t.get("failure"):
+                expected_prefix = t["globs"][0][:-3] if t["globs"][0].endswith("/**") else None
+                if expected_prefix and not any(f.startswith(expected_prefix + "/" + t["id"]) for f in final_files):
+                    lost.append(t["id"])
+        status_counts = collections.Counter(t["status"] for t in tasks)
+        board_size = sh(["git", "count-objects", "-vH"], clone).stdout
+        c = self.stats.counts
+
+        def q(key):
+            vals = self.stats.latency.get(key, [])
+            if not vals:
+                return {}
+            vals = sorted(vals)
+            return {"n": len(vals), "p50": round(statistics.median(vals), 2), "p95": round(vals[int(len(vals) * 0.95) - 1], 2),
+                    "max": round(vals[-1], 2)}
+
+        return {
+            "agents": self.args.agents,
+            "seed": self.args.seed,
+            "H1_overlap_violations": overlap_violations,
+            "max_live_claims_seen": max_live,
+            "board_commits": len(commits),
+            "tasks_by_status": dict(status_counts),
+            "H2_expired_claims": c["expired_claims"],
+            "crashed_with_claim": c["crashed_with_claim"],
+            "H3_bad_landings": c["land_bad_marker"],
+            "H3_ci_gate_failed": c["ci_gate_failed"],
+            "H3_reverted_ok": c["reverted_ok"],
+            "H3_revert_failed": c["revert_failed"],
+            "H3_revert_skipped_base_red": c["revert_skipped_base_red"],
+            "H5_unexplained_main_commits": unexplained,
+            "lost_work_tasks": lost,
+            "take_ok": c["take_ok"],
+            "take_conflict": c["take_conflict"],
+            "take_refused_holding": c["take_refused_holding"],
+            "take_error": c["take_error"],
+            "land_ok": c["land_ok"],
+            "land_failed": c["land_failed"],
+            "branch_push_ok": c["branch_push_ok"],
+            "branch_push_refused": c["branch_push_refused"],
+            "ci_gate_runs": c["ci_gate_runs"],
+            "latency_take_s": q("take"),
+            "latency_done_s": q("done"),
+            "latency_heartbeat_s": q("heartbeat"),
+            "land_retries": q("land_retries"),
+            "main_commits": len(main_commits),
+            "board_repo_size": [l for l in board_size.split("\n") if l.startswith("size-pack")],
+            "agent_crashed_unexpectedly": c["agent_crashed_unexpectedly"],
+            "agent_finished": c["agent_finished"],
+            "notable_events": [e for e in self.stats.events if e["kind"] in ("take_error", "land_failed", "reverted", "expired", "agent_exception", "crash")][:40],
+        }
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--agents", type=int, default=4)
+    ap.add_argument("--tasks-per-agent", type=int, default=4)
+    ap.add_argument("--modules", type=int, default=6)
+    ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--crash-rate", type=float, default=0.1)
+    ap.add_argument("--bad-landing-rate", type=float, default=0.15)
+    ap.add_argument("--hot-rate", type=float, default=0.1)
+    ap.add_argument("--docs-rate", type=float, default=0.15)
+    ap.add_argument("--note-rate", type=float, default=0.5)
+    ap.add_argument("--stall-release-minutes", type=float, default=0.15)
+    ap.add_argument("--ci-poll-seconds", type=float, default=2.0)
+    ap.add_argument("--expire-every-seconds", type=float, default=5.0)
+    ap.add_argument("--max-seconds", type=int, default=600)
+    ap.add_argument("--out", help="write the JSON report here")
+    ap.add_argument("--keep", action="store_true", help="keep the temp repos for inspection")
+    ap.add_argument("--force-heartbeats", action="store_true", help="write every heartbeat, bypassing coalescing")
+    args = ap.parse_args()
+    sim = Sim(args)
+    try:
+        report = sim.run()
+    finally:
+        if args.keep:
+            print("repos kept at", sim.fx.tmp, file=sys.stderr)
+        else:
+            sim.fx.cleanup()
+    text = json.dumps(report, indent=2)
+    if args.out:
+        os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
+        with open(args.out, "w") as f:
+            f.write(text + "\n")
+    print(text)
+
+
+if __name__ == "__main__":
+    main()

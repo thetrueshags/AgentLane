@@ -1,0 +1,147 @@
+{
+  "agents": 12,
+  "seed": 4,
+  "H1_overlap_violations": 0,
+  "max_live_claims_seen": 9,
+  "board_commits": 104,
+  "tasks_by_status": {
+    "done": 29,
+    "open": 5
+  },
+  "H2_expired_claims": 6,
+  "crashed_with_claim": 3,
+  "H3_bad_landings": 3,
+  "H3_ci_gate_failed": 3,
+  "H3_reverted_ok": 3,
+  "H3_revert_failed": 0,
+  "H3_revert_skipped_base_red": 0,
+  "H5_unexplained_main_commits": [],
+  "lost_work_tasks": [],
+  "take_ok": 34,
+  "take_conflict": 47,
+  "take_refused_holding": 0,
+  "take_error": 0,
+  "land_ok": 31,
+  "land_failed": 0,
+  "branch_push_ok": 37,
+  "branch_push_refused": 0,
+  "ci_gate_runs": 52,
+  "latency_take_s": {
+    "n": 81,
+    "p50": 0.35,
+    "p95": 3.88,
+    "max": 18.52
+  },
+  "latency_done_s": {
+    "n": 31,
+    "p50": 1.09,
+    "p95": 16.5,
+    "max": 18.59
+  },
+  "latency_heartbeat_s": {
+    "n": 44,
+    "p50": 0.14,
+    "p95": 0.25,
+    "max": 1.34
+  },
+  "land_retries": {
+    "n": 31,
+    "p50": 0,
+    "p95": 1,
+    "max": 2
+  },
+  "main_commits": 72,
+  "board_repo_size": [
+    "size-pack: 0 bytes"
+  ],
+  "agent_crashed_unexpectedly": 0,
+  "agent_finished": 9,
+  "notable_events": [
+    {
+      "kind": "crash",
+      "member": "agent03",
+      "task": "8af48b",
+      "branch": "claim/8af48b-agent03-task-1",
+      "t": 1789470102.365
+    },
+    {
+      "kind": "expired",
+      "owner": "agent05",
+      "reason": "no heartbeat for 0 minutes",
+      "task": "6ddd79",
+      "t": 1789470108.038
+    },
+    {
+      "kind": "reverted",
+      "sha": "e418b8589f4cbae59b2253c26faccc7bb6a18835",
+      "ok": true,
+      "task": null,
+      "t": 1789470110.142
+    },
+    {
+      "kind": "crash",
+      "member": "agent04",
+      "task": "450ecb",
+      "branch": "claim/450ecb-agent04-task-10",
+      "t": 1789470117.269
+    },
+    {
+      "kind": "expired",
+      "owner": "agent03",
+      "reason": "no heartbeat for 0 minutes",
+      "task": "8af48b",
+      "t": 1789470117.289
+    },
+    {
+      "kind": "expired",
+      "owner": "agent10",
+      "reason": "no heartbeat for 0 minutes",
+      "task": "f1ff39",
+      "t": 1789470117.289
+    },
+    {
+      "kind": "expired",
+      "owner": "agent06",
+      "reason": "no heartbeat for 0 minutes",
+      "task": "f5c83a",
+      "t": 1789470117.289
+    },
+    {
+      "kind": "reverted",
+      "sha": "1170e90d27a615126cd138b065086e191c477392",
+      "ok": true,
+      "task": "e5dbbf",
+      "t": 1789470118.671
+    },
+    {
+      "kind": "crash",
+      "member": "agent05",
+      "task": "2c4092",
+      "branch": "claim/2c4092-agent05-task-5",
+      "t": 1789470121.54
+    },
+    {
+      "kind": "reverted",
+      "sha": "fe02c16d0b249acd272d11b5ff100d6d5e305bfc",
+      "ok": true,
+      "task": "0b7971",
+      "t": 1789470128.908
+    },
+    {
+      "kind": "expired",
+      "owner": "agent05",
+      "reason": "no heartbeat for 0 minutes",
+      "task": "2c4092",
+      "t": 1789470131.209
+    },
+    {
+      "kind": "expired",
+      "owner": "agent04",
+      "reason": "no heartbeat for 0 minutes",
+      "task": "450ecb",
+      "t": 1789470131.209
+    }
+  ],
+  "timed_out": false,
+  "elapsed_seconds": 42.6
+}

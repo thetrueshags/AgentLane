@@ -1,0 +1,6 @@
+* text=auto
+*.sh text eol=lf
+bin/board text eol=lf
+tools/board-mcp text eol=lf
+tools/simulate text eol=lf
+.harness/hooks/pre-push text eol=lf

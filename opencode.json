@@ -1,0 +1,10 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "board": {
+      "type": "local",
+      "command": ["python3", "tools/board-mcp"],
+      "enabled": true
+    }
+  }
+}

@@ -1,0 +1,3 @@
+[mcp_servers.board]
+command = "python3"
+args = ["tools/board-mcp"]

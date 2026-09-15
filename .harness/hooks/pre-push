@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+common_dir="$(git rev-parse --git-common-dir)"
+main_worktree_root="$(cd "$common_dir/.." && pwd)"
+exec python3 "$main_worktree_root/bin/board" check-push

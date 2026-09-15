@@ -1,0 +1,37 @@
+name: AgentLane main gate
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: main-gate
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: run the full gate on main
+        id: gate
+        continue-on-error: true
+        run: python3 bin/board gate --all
+      - name: revert the landing that broke main and reopen its task
+        if: steps.gate.outcome == 'failure'
+        env:
+          BOARD_MEMBER: board
+        run: |
+          git config user.name board
+          git config user.email board@agentlane.local
+          python3 bin/board revert-failed "${{ github.event.before }}" "${{ github.sha }}" --check-base --reason "gate failed on main: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+      - name: fail the run if the gate failed
+        if: steps.gate.outcome == 'failure'
+        run: exit 1

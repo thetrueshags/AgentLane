@@ -1,0 +1,69 @@
+{
+  "agents": 2,
+  "seed": 1,
+  "H1_overlap_violations": 0,
+  "max_live_claims_seen": 2,
+  "board_commits": 16,
+  "tasks_by_status": {
+    "done": 3,
+    "open": 1
+  },
+  "H2_expired_claims": 0,
+  "crashed_with_claim": 0,
+  "H3_bad_landings": 1,
+  "H3_ci_gate_failed": 1,
+  "H3_reverted_ok": 1,
+  "H3_revert_failed": 0,
+  "H5_unexplained_main_commits": [],
+  "lost_work_tasks": [],
+  "take_ok": 4,
+  "take_conflict": 0,
+  "take_refused_holding": 0,
+  "take_error": 0,
+  "land_ok": 4,
+  "land_failed": 0,
+  "branch_push_ok": 4,
+  "branch_push_refused": 0,
+  "ci_gate_runs": 7,
+  "latency_take_s": {
+    "n": 4,
+    "p50": 0.44,
+    "p95": 0.44,
+    "max": 0.53
+  },
+  "latency_done_s": {
+    "n": 4,
+    "p50": 0.51,
+    "p95": 0.51,
+    "max": 0.52
+  },
+  "latency_heartbeat_s": {
+    "n": 5,
+    "p50": 0.24,
+    "p95": 0.26,
+    "max": 0.39
+  },
+  "land_retries": {
+    "n": 4,
+    "p50": 0.0,
+    "p95": 0,
+    "max": 0
+  },
+  "main_commits": 12,
+  "board_repo_size": [
+    "size-pack: 0 bytes"
+  ],
+  "agent_crashed_unexpectedly": 0,
+  "agent_finished": 2,
+  "notable_events": [
+    {
+      "kind": "reverted",
+      "sha": "24b4d80db80931506932b9ff5808d5550bd58c64",
+      "ok": true,
+      "task": "4181c1",
+      "t": 1789469335.252
+    }
+  ],
+  "timed_out": false,
+  "elapsed_seconds": 11.8
+}

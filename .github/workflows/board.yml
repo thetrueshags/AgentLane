@@ -1,0 +1,59 @@
+name: AgentLane board
+
+on:
+  push:
+    branches: [board]
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: board
+  cancel-in-progress: false
+
+jobs:
+  tend:
+    if: github.event_name != 'push' || github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: check whether this project uses a shared board
+        id: board
+        run: |
+          refs=$(git ls-remote --heads origin board)
+          if [ -n "$refs" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.board.outputs.exists == 'true'
+        with:
+          ref: board
+          path: board-data
+          fetch-depth: 0
+      - name: expire stale claims and narrate new events
+        if: steps.board.outputs.exists == 'true'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          python3 bin/board --board-dir board-data expire
+          if [ -n "$SLACK_WEBHOOK_URL" ]; then
+            python3 bin/board --board-dir board-data narrate --slack-url "$SLACK_WEBHOOK_URL"
+          else
+            python3 bin/board --board-dir board-data narrate
+          fi
+          python3 bin/board --board-dir board-data render
+      - name: push board changes
+        if: steps.board.outputs.exists == 'true'
+        run: |
+          cd board-data
+          git config user.name board
+          git config user.email board@agentlane.local
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -q -m "board: tend"
+          git push -q origin HEAD:board

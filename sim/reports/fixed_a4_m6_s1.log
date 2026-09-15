@@ -1,0 +1,92 @@
+{
+  "agents": 4,
+  "seed": 1,
+  "H1_overlap_violations": 0,
+  "max_live_claims_seen": 4,
+  "board_commits": 36,
+  "tasks_by_status": {
+    "done": 9,
+    "claimed": 1,
+    "open": 2
+  },
+  "H2_expired_claims": 1,
+  "crashed_with_claim": 2,
+  "H3_bad_landings": 1,
+  "H3_ci_gate_failed": 1,
+  "H3_reverted_ok": 1,
+  "H3_revert_failed": 0,
+  "H3_revert_skipped_base_red": 0,
+  "H5_unexplained_main_commits": [],
+  "lost_work_tasks": [],
+  "take_ok": 12,
+  "take_conflict": 4,
+  "take_refused_holding": 0,
+  "take_error": 0,
+  "land_ok": 10,
+  "land_failed": 0,
+  "branch_push_ok": 16,
+  "branch_push_refused": 0,
+  "ci_gate_runs": 22,
+  "latency_take_s": {
+    "n": 16,
+    "p50": 0.32,
+    "p95": 1.04,
+    "max": 4.11
+  },
+  "latency_done_s": {
+    "n": 10,
+    "p50": 0.56,
+    "p95": 0.6,
+    "max": 0.71
+  },
+  "latency_heartbeat_s": {
+    "n": 12,
+    "p50": 0.12,
+    "p95": 0.14,
+    "max": 0.15
+  },
+  "land_retries": {
+    "n": 10,
+    "p50": 0.0,
+    "p95": 0,
+    "max": 1
+  },
+  "main_commits": 25,
+  "board_repo_size": [
+    "size-pack: 0 bytes"
+  ],
+  "agent_crashed_unexpectedly": 0,
+  "agent_finished": 2,
+  "notable_events": [
+    {
+      "kind": "crash",
+      "member": "agent01",
+      "task": "c3a7ca",
+      "branch": "claim/c3a7ca-agent01-task-1",
+      "t": 1789469756.974
+    },
+    {
+      "kind": "expired",
+      "owner": "agent01",
+      "reason": "no heartbeat for 0 minutes",
+      "task": "c3a7ca",
+      "t": 1789469764.678
+    },
+    {
+      "kind": "crash",
+      "member": "agent00",
+      "task": "523e23",
+      "branch": "claim/523e23-agent00-task-3",
+      "t": 1789469765.605
+    },
+    {
+      "kind": "reverted",
+      "sha": "0960739f2290aca70e27b99499a2778e82244616",
+      "ok": true,
+      "task": "5f6f6b",
+      "t": 1789469768.321
+    }
+  ],
+  "timed_out": false,
+  "elapsed_seconds": 20.0
+}

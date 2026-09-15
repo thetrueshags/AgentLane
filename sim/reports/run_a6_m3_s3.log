@@ -1,0 +1,90 @@
+{
+  "agents": 6,
+  "seed": 3,
+  "H1_overlap_violations": 0,
+  "max_live_claims_seen": 6,
+  "board_commits": 96,
+  "tasks_by_status": {
+    "done": 21,
+    "open": 3
+  },
+  "H2_expired_claims": 1,
+  "crashed_with_claim": 2,
+  "H3_bad_landings": 1,
+  "H3_ci_gate_failed": 1,
+  "H3_reverted_ok": 1,
+  "H3_revert_failed": 0,
+  "H5_unexplained_main_commits": [],
+  "lost_work_tasks": [],
+  "take_ok": 24,
+  "take_conflict": 45,
+  "take_refused_holding": 1,
+  "take_error": 0,
+  "land_ok": 22,
+  "land_failed": 0,
+  "branch_push_ok": 28,
+  "branch_push_refused": 0,
+  "ci_gate_runs": 46,
+  "latency_take_s": {
+    "n": 70,
+    "p50": 0.15,
+    "p95": 0.9,
+    "max": 1.44
+  },
+  "latency_done_s": {
+    "n": 22,
+    "p50": 0.88,
+    "p95": 1.49,
+    "max": 1.73
+  },
+  "latency_heartbeat_s": {
+    "n": 34,
+    "p50": 0.28,
+    "p95": 0.99,
+    "max": 1.31
+  },
+  "land_retries": {
+    "n": 22,
+    "p50": 0.0,
+    "p95": 1,
+    "max": 1
+  },
+  "main_commits": 50,
+  "board_repo_size": [
+    "size-pack: 0 bytes"
+  ],
+  "agent_crashed_unexpectedly": 0,
+  "agent_finished": 6,
+  "notable_events": [
+    {
+      "kind": "crash",
+      "member": "agent01",
+      "task": "7fcf12",
+      "branch": "claim/7fcf12-agent01-task-2",
+      "t": 1789469487.459
+    },
+    {
+      "kind": "reverted",
+      "sha": "787262372793761597084e59bd8289afb0df824e",
+      "ok": true,
+      "task": "6acec5",
+      "t": 1789469503.396
+    },
+    {
+      "kind": "crash",
+      "member": "agent04",
+      "task": "ee1824",
+      "branch": "claim/ee1824-agent04-task-23",
+      "t": 1789469504.109
+    },
+    {
+      "kind": "expired",
+      "owner": "agent04",
+      "reason": "no heartbeat for 0 minutes",
+      "task": "ee1824",
+      "t": 1789469512.831
+    }
+  ],
+  "timed_out": false,
+  "elapsed_seconds": 37.7
+}

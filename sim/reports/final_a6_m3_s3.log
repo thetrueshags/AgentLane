@@ -1,0 +1,98 @@
+{
+  "agents": 6,
+  "seed": 3,
+  "H1_overlap_violations": 0,
+  "max_live_claims_seen": 6,
+  "board_commits": 53,
+  "tasks_by_status": {
+    "done": 15,
+    "open": 3
+  },
+  "H2_expired_claims": 2,
+  "crashed_with_claim": 2,
+  "H3_bad_landings": 1,
+  "H3_ci_gate_failed": 1,
+  "H3_reverted_ok": 1,
+  "H3_revert_failed": 0,
+  "H3_revert_skipped_base_red": 0,
+  "H5_unexplained_main_commits": [],
+  "lost_work_tasks": [],
+  "take_ok": 18,
+  "take_conflict": 22,
+  "take_refused_holding": 0,
+  "take_error": 0,
+  "land_ok": 16,
+  "land_failed": 0,
+  "branch_push_ok": 16,
+  "branch_push_refused": 0,
+  "ci_gate_runs": 29,
+  "latency_take_s": {
+    "n": 40,
+    "p50": 0.32,
+    "p95": 1.53,
+    "max": 2.5
+  },
+  "latency_done_s": {
+    "n": 16,
+    "p50": 0.71,
+    "p95": 2.48,
+    "max": 2.89
+  },
+  "latency_heartbeat_s": {
+    "n": 26,
+    "p50": 0.13,
+    "p95": 0.15,
+    "max": 0.17
+  },
+  "land_retries": {
+    "n": 16,
+    "p50": 0.0,
+    "p95": 1,
+    "max": 1
+  },
+  "main_commits": 33,
+  "board_repo_size": [
+    "size-pack: 0 bytes"
+  ],
+  "agent_crashed_unexpectedly": 0,
+  "agent_finished": 4,
+  "notable_events": [
+    {
+      "kind": "crash",
+      "member": "agent04",
+      "task": "7acacf",
+      "branch": "claim/7acacf-agent04-task-1",
+      "t": 1789470148.589
+    },
+    {
+      "kind": "crash",
+      "member": "agent05",
+      "task": "91a5e4",
+      "branch": "claim/91a5e4-agent05-task-2",
+      "t": 1789470150.584
+    },
+    {
+      "kind": "expired",
+      "owner": "agent04",
+      "reason": "no heartbeat for 0 minutes",
+      "task": "7acacf",
+      "t": 1789470160.935
+    },
+    {
+      "kind": "expired",
+      "owner": "agent05",
+      "reason": "no heartbeat for 0 minutes",
+      "task": "91a5e4",
+      "t": 1789470160.935
+    },
+    {
+      "kind": "reverted",
+      "sha": "682b27e9b2f8676a68d41965e8b42d92082d08a8",
+      "ok": true,
+      "task": "2b1b2c",
+      "t": 1789470161.941
+    }
+  ],
+  "timed_out": false,
+  "elapsed_seconds": 25.6
+}

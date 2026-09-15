@@ -1,0 +1,27 @@
+{
+  "remote": "origin",
+  "main_branch": "main",
+  "board_branch": "board",
+  "landing_mode": "direct",
+  "ttl_minutes": 45,
+  "max_extensions": 2,
+  "hot_ttl_minutes": 10,
+  "stall_minutes": 10,
+  "stall_release_minutes": 15,
+  "hot_paths": [
+    "package.json",
+    "package-lock.json",
+    "pyproject.toml",
+    "mix.exs",
+    "go.mod",
+    "src/App.*",
+    "src/main.*",
+    "src/router.*",
+    "src/routes.*"
+  ],
+  "docs_globs": ["docs/**", "pitch/**", "*.md", "**/*.md"],
+  "warn_lines": 300,
+  "refuse_lines": 800,
+  "land_retries": 4,
+  "push_retries": 6
+}

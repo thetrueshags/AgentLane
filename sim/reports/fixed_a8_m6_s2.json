@@ -1,0 +1,119 @@
+{
+  "agents": 8,
+  "seed": 2,
+  "H1_overlap_violations": 0,
+  "max_live_claims_seen": 7,
+  "board_commits": 86,
+  "tasks_by_status": {
+    "done": 25,
+    "open": 4
+  },
+  "H2_expired_claims": 4,
+  "crashed_with_claim": 2,
+  "H3_bad_landings": 2,
+  "H3_ci_gate_failed": 2,
+  "H3_reverted_ok": 2,
+  "H3_revert_failed": 0,
+  "H3_revert_skipped_base_red": 0,
+  "H5_unexplained_main_commits": [],
+  "lost_work_tasks": [],
+  "take_ok": 29,
+  "take_conflict": 30,
+  "take_refused_holding": 0,
+  "take_error": 0,
+  "land_ok": 27,
+  "land_failed": 0,
+  "branch_push_ok": 18,
+  "branch_push_refused": 0,
+  "ci_gate_runs": 44,
+  "latency_take_s": {
+    "n": 59,
+    "p50": 0.38,
+    "p95": 4.55,
+    "max": 5.0
+  },
+  "latency_done_s": {
+    "n": 27,
+    "p50": 1.11,
+    "p95": 5.13,
+    "max": 22.87
+  },
+  "latency_heartbeat_s": {
+    "n": 29,
+    "p50": 0.13,
+    "p95": 0.14,
+    "max": 0.15
+  },
+  "land_retries": {
+    "n": 27,
+    "p50": 0,
+    "p95": 1,
+    "max": 1
+  },
+  "main_commits": 52,
+  "board_repo_size": [
+    "size-pack: 0 bytes"
+  ],
+  "agent_crashed_unexpectedly": 0,
+  "agent_finished": 6,
+  "notable_events": [
+    {
+      "kind": "expired",
+      "owner": "agent00",
+      "reason": "no heartbeat for 0 minutes",
+      "task": "3bb7f8",
+      "t": 1789469787.138
+    },
+    {
+      "kind": "crash",
+      "member": "agent03",
+      "task": "42a405",
+      "branch": "claim/42a405-agent03-task-4",
+      "t": 1789469788.932
+    },
+    {
+      "kind": "reverted",
+      "sha": "a9e55e85bdfdac835adc0ab606c0b94a8b5ea4ca",
+      "ok": true,
+      "task": "924698",
+      "t": 1789469790.265
+    },
+    {
+      "kind": "expired",
+      "owner": "agent02",
+      "reason": "no heartbeat for 0 minutes",
+      "task": "a9d1ef",
+      "t": 1789469792.609
+    },
+    {
+      "kind": "crash",
+      "member": "agent06",
+      "task": "bef893",
+      "branch": "claim/bef893-agent06-task-6",
+      "t": 1789469793.068
+    },
+    {
+      "kind": "expired",
+      "owner": "agent03",
+      "reason": "no heartbeat for 0 minutes",
+      "task": "42a405",
+      "t": 1789469801.296
+    },
+    {
+      "kind": "expired",
+      "owner": "agent06",
+      "reason": "no heartbeat for 0 minutes",
+      "task": "bef893",
+      "t": 1789469801.296
+    },
+    {
+      "kind": "reverted",
+      "sha": "0fb18deebddc7365716dac191334b21f8d3adad7",
+      "ok": true,
+      "task": "7ab6f3",
+      "t": 1789469801.904
+    }
+  ],
+  "timed_out": false,
+  "elapsed_seconds": 40.8
+}
