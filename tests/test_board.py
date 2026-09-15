@@ -6,6 +6,7 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -16,7 +17,7 @@ BOARD = os.path.join(ROOT, "bin", "board")
 
 
 def load_board_module():
-    loader = importlib.machinery.SourceFileLoader("boardmod", BOARD)
+    loader = importlib.machinery.SourceFileLoader("boardmod", os.path.join(ROOT, "agentlane", "board.py"))
     spec = importlib.util.spec_from_loader("boardmod", loader)
     mod = importlib.util.module_from_spec(spec)
     loader.exec_module(mod)
@@ -45,7 +46,9 @@ class Fixture:
         sh(["git", "init", "-q", "--bare", "-b", "main", self.origin], self.tmp)
         seed = os.path.join(self.tmp, "seed")
         sh(["git", "clone", "-q", self.origin, seed], self.tmp)
-        for rel in ("bin/board", ".harness/config.json", ".harness/.gitignore", ".harness/hooks/pre-push",
+        shutil.copytree(os.path.join(ROOT, "agentlane"), os.path.join(seed, "agentlane"),
+                        ignore=shutil.ignore_patterns("__pycache__"))
+        for rel in (".gitattributes", ".gitignore", ".mcp.json", ".codex/config.toml", "bin/board", ".harness/config.json", ".harness/.gitignore", ".harness/hooks/pre-push",
                     ".harness/gate/code.sh", ".harness/gate/docs.sh"):
             dst = os.path.join(seed, rel)
             os.makedirs(os.path.dirname(dst), exist_ok=True)
@@ -76,7 +79,7 @@ class Fixture:
         env = {"BOARD_MEMBER": member, "BOARD_AGENT": "test-agent"}
         if extra_env:
             env.update(extra_env)
-        return sh(["python3", BOARD, "--json"] + list(args), path, env=env, check=check, input_text=input_text)
+        return sh([sys.executable, BOARD, "--json"] + list(args), path, env=env, check=check, input_text=input_text)
 
     def data(self, p):
         return json.loads(p.stdout)
