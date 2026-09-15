@@ -1,5 +1,4 @@
 """Read-only task views and installation diagnostics."""
-import json
 import os
 import shutil
 
@@ -105,16 +104,22 @@ def doctor(args):
             check("git_" + key, repo.git(["config", key], check=False).stdout.strip(),
                   "Set a Git commit identity with git config %s <value>." % key)
         for rel in (".harness/config.json", ".harness/gate/code.sh", ".harness/gate/docs.sh", "AGENTS.md"):
-            check(rel, os.path.isfile(os.path.join(repo.root, rel)), "Required project file; use agentlane install if missing.")
+            check(rel, os.path.isfile(os.path.join(repo.root, rel)), "Required project file; use agentlane install --project if missing.")
         bash = core.find_bash()
         check("bash", bash, "Bash available" if bash else "Install Bash; on Windows install Git for Windows.")
         gate = os.path.join(repo.root, ".harness/gate/code.sh")
         check("gate_executable", os.path.isfile(gate) and (os.name == "nt" or os.access(gate, os.X_OK)),
               "Gates run through Bash; set chmod +x .harness/gate/*.sh on Unix for direct execution.", False)
         hooks = core.hook_path(repo)
-        check("pre_push_hook", os.path.isfile(hooks), "Install the local guardrail with agentlane install.")
-        check("agent_config", any(os.path.isfile(os.path.join(repo.root, p)) for p in
-              (".mcp.json", ".codex/config.toml", ".cursor/mcp.json", ".gemini/settings.json", ".vscode/mcp.json", "opencode.json")),
+        hook_body = ""
+        if os.path.isfile(hooks):
+            with open(hooks, encoding="utf-8", errors="replace") as f:
+                hook_body = f.read()
+        check("pre_push_hook", "check-push" in hook_body,
+              "Install with agentlane install; if using a custom hook, integrate the check-push guardrail.")
+        from agentlane.setup import AGENTS
+        config_path = AGENTS.get(repo.agent)
+        check("agent_config", not config_path or os.path.isfile(os.path.join(repo.root, config_path)),
               "Use agentlane install --agent <tool> for MCP configuration; shell agents can use AGENTS.md.", False)
         check("workflows", os.path.isdir(os.path.join(repo.root, ".github/workflows")),
               "GitHub Actions are optional. Inspect workflow branches and permissions for your project.", False)

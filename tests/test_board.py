@@ -292,7 +292,7 @@ class LandingTests(unittest.TestCase):
         self.commit(self.a, "README.md", "# changed\n")
         p = sh(["git", "push", "-q", "origin", "HEAD:main"], self.a, check=False, env={"BOARD_MEMBER": "alice"})
         self.assertNotEqual(p.returncode, 0)
-        self.assertIn("board done", p.stderr)
+        self.assertIn("agentlane done", p.stderr)
 
     def test_pre_push_hook_blocks_paths_outside_claim_on_claim_branch(self):
         self.fx.board("alice", "take", "--new", "Login page", "--globs", "src/auth/**")
@@ -302,7 +302,7 @@ class LandingTests(unittest.TestCase):
         self.assertIn("outside your claim", p.stderr)
 
     def test_revert_failed_reopens_task(self):
-        self.fx.board("alice", "take", "--new", "Login page", "--globs", "src/auth/**")
+        claim = self.fx.data(self.fx.board("alice", "take", "--new", "Login page", "--globs", "src/auth/**"))["claim"]
         self.commit(self.a, "src/auth/login.py", "def login():\n    return 'broken'\n")
         landed = self.fx.data(self.fx.board("alice", "done"))["landed"]
         res = self.fx.data(self.fx.board("bob", "revert-failed", landed["before"], landed["after"], "--reason", "smoke red"))
@@ -311,6 +311,9 @@ class LandingTests(unittest.TestCase):
         sh(["git", "fetch", "-q", "origin"], self.b)
         p = sh(["git", "show", "origin/main:src/auth/login.py"], self.b)
         self.assertNotIn("broken", p.stdout)
+        self.fx.board("alice", "take", claim["id"])
+        recovered = sh(["git", "show", "HEAD:src/auth/login.py"], self.a)
+        self.assertIn("broken", recovered.stdout, "The original branch must survive landing for repair after rollback")
 
 
 if __name__ == "__main__":
@@ -376,7 +379,7 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(p.returncode, 1)
         err = self.fx.data(p)["error"]
         self.assertIn("expired", err)
-        self.assertIn("board take", err)
+        self.assertIn("agentlane take", err)
 
     def test_revert_is_skipped_when_main_was_already_red_at_base(self):
         self.fx.board("alice", "take", "--new", "Gate", "--globs", ".harness/gate/**")

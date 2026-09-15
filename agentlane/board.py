@@ -5,8 +5,7 @@ Everything lives on a `board` branch of the shared repo. Claims are atomic becau
 update is compare-and-swap: we fetch, check, commit, push; a rejected push means someone else
 got there first and we retry. Standard library only, Python 3.9+.
 
-Humans do not run this directly. Their coding agent does, through tools/board-mcp or by
-calling this script. Run `board --help` for the commands.
+Humans and agents use the same CLI. Run `agentlane --help` for the commands.
 """
 import argparse
 import contextlib
@@ -125,7 +124,7 @@ def validate_record(kind, record):
                 except (ValueError, TypeError, AttributeError):
                     raise BoardError("Invalid %s timestamp in claim %s" % (key, record["id"]))
         for key in ("extensions", "ttl_minutes"):
-            if not isinstance(record.get(key), (int, float)) or record[key] < 0:
+            if isinstance(record.get(key), bool) or not isinstance(record.get(key), (int, float)) or not math.isfinite(record[key]) or record[key] < 0:
                 raise BoardError("Invalid %s in claim %s" % (key, record["id"]))
 
 
@@ -390,7 +389,7 @@ class Board:
             return
         if not os.path.isdir(self.dir):
             if not self.exists_on_remote():
-                raise BoardError("no `%s` branch on %s yet. Run: board init" % (self.branch, self.remote))
+                raise BoardError("no `%s` branch on %s yet. Run: agentlane init" % (self.branch, self.remote))
             self.repo.git(["fetch", "-q", self.remote, self.branch])
             self.repo.git(["worktree", "add", "-q", "--detach", self.dir, "FETCH_HEAD"])
 
@@ -459,7 +458,8 @@ class Board:
 
     def path(self, *parts):
         path = os.path.abspath(os.path.join(self.dir, *parts))
-        if os.path.normcase(os.path.commonpath([self.dir, path])) != os.path.normcase(self.dir):
+        root = os.path.realpath(self.dir)
+        if os.path.normcase(os.path.commonpath([root, os.path.realpath(path)])) != os.path.normcase(root):
             raise BoardError("Board path must stay inside the board checkout")
         return path
 
@@ -495,7 +495,7 @@ class Board:
             return out
         for name in sorted(os.listdir(d)):
             if name.endswith(".json"):
-                record = read_json(os.path.join(d, name))
+                record = read_json(self.path(kind, name))
                 validate_record(kind, record)
                 if record.get("id", record.get("name")) != name[:-5]:
                     raise BoardError("Board filename does not match its record ID: " + name)
@@ -555,7 +555,10 @@ class Board:
         if os.path.isdir(d):
             for name in os.listdir(d):
                 if name.endswith(".jsonl"):
-                    out.extend(read_jsonl(os.path.join(d, name)))
+                    records = read_jsonl(self.path("notes", name))
+                    if any(not isinstance(r.get("kind"), str) for r in records):
+                        raise BoardError("Invalid note kind in " + name)
+                    out.extend(records)
         return sorted(out, key=lambda r: (r.get("ts", ""), r.get("member", ""), r.get("id", "")))
 
     def all_events(self):
@@ -564,7 +567,7 @@ class Board:
         if os.path.isdir(d):
             for name in os.listdir(d):
                 if name.endswith(".jsonl"):
-                    out.extend(read_jsonl(os.path.join(d, name)))
+                    out.extend(read_jsonl(self.path("events", name)))
         return sorted(out, key=lambda r: (r.get("ts", ""), r.get("member", ""), r.get("id", "")))
 
     def expire(self, at=None):
@@ -687,7 +690,7 @@ def cmd_init(args, repo):
     if repo.git(["ls-remote", "--exit-code", "--heads", repo.remote, repo.main], check=False).returncode:
         raise BoardError("Remote main branch missing or unreachable. Push %s and check Git credentials." % repo.main)
     board.init()
-    out(args, "board branch `%s` created on %s. Next: board join --name <you> --agent <agent>" %
+    out(args, "board branch `%s` created on %s. Next: agentlane join --name <you> --agent <agent>" %
         (board.branch, board.remote), {"ok": True, "branch": board.branch})
 
 
@@ -704,7 +707,7 @@ def cmd_join(args, repo):
 
     res = board.txn("board: %s joined" % name, mutate)
     write_json(local, {"name": name, "agent": agent})
-    out(args, "welcome %s. Your agent is recorded as %s. Try: board status" % (name, agent), res)
+    out(args, "welcome %s. Your agent is recorded as %s. Try: agentlane status" % (name, agent), res)
 
 
 def cmd_add(args, repo):
@@ -814,7 +817,7 @@ def check_hot(repo, globs, hot):
         for h in hot_paths:
             if globs_overlap(g, h):
                 raise BoardError("path `%s` covers hot path `%s`. Hot paths are edited only through a "
-                                 "10 minute micro-claim: board take --hot --new \"...\" --globs %s" % (g, h, h))
+                                 "10 minute micro-claim: agentlane take --hot --new \"...\" --globs %s" % (g, h, h))
 
 
 def cmd_take(args, repo):
@@ -857,9 +860,9 @@ def cmd_take(args, repo):
         if mine:
             own_branches = [c["branch"] for c in mine]
             if len(mine) >= 2:
-                raise BoardError("you already hold two claims. Finish one (board done) before taking more")
+                raise BoardError("you already hold two claims. Finish one (agentlane done) before taking more")
             if base not in own_branches:
-                raise BoardError("you already hold '%s'. Finish it (board done), hand it off, or stack on it "
+                raise BoardError("you already hold '%s'. Finish it (agentlane done), hand it off, or stack on it "
                                  "with --base %s" % (b.task(mine[0]["id"])["title"], own_branches[0]))
         elif base != repo.main:
             raise BoardError("--base must be one of your own claim branches; you hold none")
@@ -867,9 +870,10 @@ def cmd_take(args, repo):
             hit = any_overlap(globs, c["globs"])
             if hit:
                 other = b.task(c["id"])
-                raise Conflict("overlap: your `%s` collides with %s's `%s` on '%s' (%d min left). "
-                               "Pick different paths, wait, or ask them to hand it off." %
-                               (hit[0], c["owner"], hit[1], other["title"],
+                raise Conflict("Cannot claim %s. Path `%s` overlaps an active claim:\n\n"
+                               "  %s - %s\n  owner: %s / %s\n  claimed path: %s (%d min left)\n\n"
+                               "Choose another task or ask the owner to release or hand off the claim." %
+                               (t["id"], hit[0], c["id"], other["title"], c["owner"], c.get("agent", "unknown"), hit[1],
                                 int((parse_iso(c["expires"]) - now()).total_seconds() // 60)))
         for other in b.claims():
             if other["owner"] != me and other["branch"] == base:
@@ -913,7 +917,7 @@ def cmd_take(args, repo):
         board.txn("board: undo failed checkout", undo)
         raise BoardError("Could not switch to the claim branch; claim released. Preserve local changes, inspect git status, then retry.")
     out(args, "claimed '%s' for %d minutes. You are on branch %s (from %s). Edit only under: %s. "
-        "Commit small and often; run `board done` to land." %
+        "Commit small and often; run `agentlane done` to land." %
         (t["title"], c["ttl_minutes"], c["branch"], start, ", ".join(c["globs"])), res)
 
 
@@ -975,7 +979,7 @@ def cmd_extend(args, repo):
         if c.get("hot"):
             raise BoardError("Hot claims cannot be extended; finish or release this claim.")
         if c["extensions"] >= int(repo.cfg["max_extensions"]):
-            raise BoardError("no extensions left on '%s'. Land what you have (board done), or split the rest "
+            raise BoardError("no extensions left on '%s'. Land what you have (agentlane done), or split the rest "
                              "into a new task" % b.task(c["id"])["title"])
         c["extensions"] += 1
         c["expires"] = iso(parse_iso(c["expires"]) + dt.timedelta(minutes=int(c["ttl_minutes"])))
@@ -1108,7 +1112,9 @@ def run_gate(repo, tier, paths):
     results = []
     for s in scripts:
         if not os.path.isfile(s):
-            raise BoardError("Missing gate %s. Restore or create it before landing." % os.path.relpath(s, repo.root))
+            results.append({"script": os.path.relpath(s, repo.root), "exit": 1,
+                            "output": "Missing gate. Restore or create it before landing."})
+            return False, results
         bash = find_bash()
         if not bash:
             raise BoardError("Quality gates need Bash; install Bash (Git for Windows on Windows).")
@@ -1144,6 +1150,10 @@ def cmd_gate(args, repo):
 
 
 def submit_review(args, repo, board, claim):
+    board.sync()
+    current = my_claim(board, repo, claim["id"])
+    if current.get("lease", current["created"]) != claim.get("lease", claim["created"]):
+        raise BoardError("Claim changed during the gate; inspect agentlane show before retrying.")
     repo.git(["push", "-q", "-u", repo.remote, "HEAD"])
     try:
         p = run(["gh", "pr", "create", "--fill", "--draft", "--base", repo.main,
@@ -1157,8 +1167,9 @@ def submit_review(args, repo, board, claim):
 
     def mutate(b):
         current = b.claim(claim["id"])
-        if not current or current["owner"] != repo.member:
+        if not current or current["owner"] != repo.member or current.get("lease", current["created"]) != claim.get("lease", claim["created"]):
             raise BoardError("claim changed while opening %s; inspect the board before continuing" % url)
+        require_live(current, repo.cfg)
         t = b.task(claim["id"])
         t.update(status="review", last_branch=claim["branch"], pr=url)
         b.save_task(t)
@@ -1224,6 +1235,26 @@ def cmd_sync_reviews(args, repo):
     out(args, "updated %d reviewed task(s)" % len(changed), {"updated": changed})
 
 
+def push_main_and_board(repo, board, message):
+    """Publish both prepared commits or neither; callers replay on contention."""
+    board.render()
+    git(["add", "-A"], cwd=board.dir)
+    git(["-c", "user.name=board", "-c", "user.email=board@agentlane.local",
+         "commit", "-q", "-m", message], cwd=board.dir)
+    board_head = git(["rev-parse", "HEAD"], cwd=board.dir).stdout.strip()
+    head = repo.git(["rev-parse", "HEAD"]).stdout.strip()
+    p = repo.git(["push", "--atomic", "-q", repo.remote,
+                  head + ":refs/heads/" + repo.main, board_head + ":refs/heads/" + board.branch],
+                 check=False, env={"BOARD_LAND": "1"})
+    if p.returncode == 0:
+        return True
+    if "does not support --atomic" in p.stderr:
+        raise BoardError("Remote does not support atomic Git pushes. No changes landed; use PR mode or a remote supporting atomic pushes.")
+    if not any(m in (p.stderr + p.stdout).lower() for m in RETRYABLE_PUSH_MARKERS):
+        raise BoardError("Atomic push did not confirm success. Inspect remote main and board before retrying; check connectivity and permissions.\n" + p.stderr)
+    return False
+
+
 def cmd_done(args, repo):
     board = Board(repo, args.board_dir)
     me, agent = repo.member, repo.agent
@@ -1235,7 +1266,7 @@ def cmd_done(args, repo):
         for t0 in board.tasks():
             if t0.get("last_branch") == cur and t0["status"] == "open":
                 raise BoardError("your claim on '%s' expired or was released, so it went back to open. Your work is "
-                                 "safe on %s. Take it again (board take %s), then run board done." % (t0["title"], cur, t0["id"]))
+                                 "safe on %s. Take it again (agentlane take %s), then run agentlane done." % (t0["title"], cur, t0["id"]))
     c = my_claim(board, repo, args.task)
     t = board.task(c["id"])
     if cur != c["branch"]:
@@ -1251,7 +1282,7 @@ def cmd_done(args, repo):
             repo.git(["rebase", "--abort"], check=False)
             conflict_files = re.findall(r"CONFLICT.*?: (.*)", p.stdout + p.stderr)
             msg = ("rebase onto %s hit a conflict%s. Resolve it in your worktree (git rebase %s), then run "
-                   "board done again. Your claim is kept." %
+                   "agentlane done again. Your claim is kept." %
                    (repo.main, (" in " + ", ".join(conflict_files)) if conflict_files else "", repo.remote_main()))
             board.txn("board: %s land conflict" % me,
                       lambda b: b.event(me, "conflict", "%s hit a rebase conflict landing '%s'" % (me, t["title"]),
@@ -1279,7 +1310,7 @@ def cmd_done(args, repo):
             board.txn("board: %s gate failed" % me,
                       lambda b: b.event(me, "gate_failed", "%s: gate failed on '%s'" % (me, t["title"]),
                                         task=t["id"], agent=agent))
-            raise BoardError("gate failed (%s tier). Fix and run board done again.\n%s" %
+            raise BoardError("gate failed (%s tier). Fix and run agentlane done again.\n%s" %
                              (tier, "\n".join("%s exit %d\n%s" % (r["script"], r["exit"], r["output"]) for r in results)))
         if args.pr or repo.cfg["landing_mode"] == "pr":
             submit_review(args, repo, board, c)
@@ -1299,26 +1330,13 @@ def cmd_done(args, repo):
         board.drop_claim(c["id"])
         board.event(me, "done", "%s landed '%s' on %s (%s, %d files)" %
                     (me, t2["title"], repo.main, head[:8], len(paths)), task=c["id"], agent=agent, sha=head)
-        board.render()
-        git(["add", "-A"], cwd=board.dir)
-        git(["-c", "user.name=board", "-c", "user.email=board@agentlane.local",
-             "commit", "-q", "-m", "board: %s landed %s" % (me, c["id"])], cwd=board.dir)
-        board_head = git(["rev-parse", "HEAD"], cwd=board.dir).stdout.strip()
-        p = repo.git(["push", "--atomic", "-q", repo.remote,
-                      head + ":refs/heads/" + repo.main, board_head + ":refs/heads/" + board.branch],
-                     check=False, env={"BOARD_LAND": "1"})
-        if p.returncode == 0:
+        if push_main_and_board(repo, board, "board: %s landed %s" % (me, c["id"])):
             break
         landed = None
-        if "does not support --atomic" in p.stderr:
-            raise BoardError("Remote does not support atomic Git pushes. No changes landed; use PR mode or a remote supporting atomic pushes.")
-        if not any(m in (p.stderr + p.stdout).lower() for m in RETRYABLE_PUSH_MARKERS):
-            raise BoardError("Atomic landing failed; claim kept. Check remote permissions and retry.\n" + p.stderr)
     if not landed:
         raise BoardError("Competing pushes prevented landing after %d attempts; claim kept. Run agentlane done again." % attempts)
 
     repo.git(["checkout", "-q", "--detach", repo.remote_main()], check=False)
-    repo.git(["branch", "-q", "-D", c["branch"]], check=False)
     out(args, "landed '%s' on %s as %s. Claim released. You are on %s; take the next task." %
         (t2["title"], repo.main, landed["after"][:8], repo.remote_main()), {"task": t2, "landed": landed, "log": log})
 
@@ -1436,6 +1454,8 @@ def cmd_revert_failed(args, repo):
     """Used by the main-gate workflow: revert the range that broke main and reopen its task."""
     board = Board(repo, args.board_dir)
     before, after = args.before, args.after
+    if repo.git(["status", "--porcelain", "--untracked-files=no"]).stdout.strip():
+        raise BoardError("Automatic recovery needs a clean CI checkout. Commit or preserve local changes first.")
     repo.git(["fetch", "-q", repo.remote, repo.main])
     if args.check_base:
         repo.git(["checkout", "-q", "--detach", before])
@@ -1444,14 +1464,6 @@ def cmd_revert_failed(args, repo):
             out(args, "main was already failing at %s; leaving the revert to the run that broke it" % before[:8],
                 {"reverted": None, "skipped": "base already red", "base": before})
             return
-    repo.git(["checkout", "-q", "-B", repo.main, repo.remote_main()])
-    p = repo.git(["-c", "user.name=board", "-c", "user.email=board@agentlane.local",
-                  "revert", "--no-edit", "%s..%s" % (before, after)], check=False)
-    if p.returncode != 0:
-        repo.git(["revert", "--abort"], check=False)
-        raise BoardError("automatic revert failed; a human needs to fix main:\n" + p.stderr)
-    repo.git(["push", "-q", repo.remote, "HEAD:refs/heads/%s" % repo.main], env={"BOARD_LAND": "1"})
-
     def mutate(b):
         hit = None
         for t in b.tasks():
@@ -1459,7 +1471,10 @@ def cmd_revert_failed(args, repo):
                 if l.get("after") == after:
                     hit = t
         if hit:
+            if hit["status"] != "done":
+                raise BoardError("Task %s is no longer done; inspect its current ownership before reverting." % hit["id"])
             hit["status"] = "open"
+            hit["owner"] = None
             hit["failure"] = args.reason or "gate failed on main"
             b.save_task(hit)
             b.event(hit.get("owner") or "board", "reverted",
@@ -1469,7 +1484,20 @@ def cmd_revert_failed(args, repo):
             b.event("board", "reverted", "commits %s..%s reverted from main: %s" % (before[:8], after[:8], args.reason or "gate failed"))
         return hit
 
-    hit = board.txn("board: reverted %s" % after[:8], mutate)
+    for attempt in range(int(repo.cfg["land_retries"])):
+        repo.git(["fetch", "-q", repo.remote, repo.main])
+        repo.git(["checkout", "-q", "--detach", repo.remote_main()])
+        board.sync()
+        hit = mutate(board)
+        p = repo.git(["-c", "user.name=board", "-c", "user.email=board@agentlane.local",
+                      "revert", "--no-edit", "%s..%s" % (before, after)], check=False)
+        if p.returncode != 0:
+            repo.git(["revert", "--abort"], check=False)
+            raise BoardError("Automatic revert failed; remote unchanged. Inspect main and resolve the conflict:\n" + p.stderr)
+        if push_main_and_board(repo, board, "board: reverted %s" % after[:8]):
+            break
+    else:
+        raise BoardError("Competing pushes prevented recovery; no recovery was published. Retry revert-failed from a fresh checkout.")
     out(args, "reverted %s..%s and reopened %s" % (before[:8], after[:8], hit["id"] if hit else "no matching task"),
         {"reverted": [before, after], "task": hit})
 
@@ -1486,7 +1514,7 @@ def cmd_check_push(args, repo):
         local_ref, local_sha, remote_ref, remote_sha = parts
         if remote_ref == main_ref:
             if os.environ.get("BOARD_LAND") != "1":
-                raise BoardError("direct pushes to %s are refused. Land through: board done" % repo.main)
+                raise BoardError("direct pushes to %s are refused. Land through: agentlane done" % repo.main)
             continue
         if remote_ref == board_ref or local_sha == "0" * 40:
             continue
@@ -1504,16 +1532,21 @@ def cmd_check_push(args, repo):
         if total >= int(repo.cfg["warn_lines"]):
             sys.stderr.write("board: %d changed lines is large for one claim; consider landing sooner\n" % total)
         board = Board(repo, args.board_dir)
+        pushed_branch = remote_ref.replace("refs/heads/", "")
         try:
             board.sync()
         except BoardError:
+            if pushed_branch.startswith("claim/"):
+                raise
             continue
-        pushed_branch = remote_ref.replace("refs/heads/", "")
         mine = [c for c in board.claims_of(repo.member) if c["branch"] == pushed_branch]
         if not mine:
+            if pushed_branch.startswith("claim/"):
+                raise BoardError("No active claim owned by %s permits pushing %s. Inspect agentlane status or recover the task first." % (repo.member, pushed_branch))
             sys.stderr.write("board: pushing %s without a matching claim; the board will not track it\n" % pushed_branch)
             continue
         c = mine[0]
+        require_live(c, repo.cfg)
         outside = paths_outside(paths, c["globs"])
         if not c.get("hot"):
             outside = sorted(set(outside) | set(paths_matching(paths, repo.cfg["hot_paths"])))

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """AgentLane MCP server (stdio, newline-delimited JSON-RPC) exposing the Git board as tools.
 
-Every tool shells out to bin/board --json, so the CLI stays the single source of behaviour.
+Every tool invokes agentlane --json, so the CLI stays the single source of behaviour.
 Standard library only. Configured for each agent in the committed config files at the repo root.
 """
 import json
@@ -84,7 +84,7 @@ def board(argv):
 
 
 def call(name, a):
-    a = a or {}
+    a = {} if a is None else a
     if not isinstance(a, dict):
         return json.dumps({"ok": False, "error": "Tool arguments must be an object"}), True
     definition = next((t for t in TOOLS if t["name"] == name), None)
@@ -179,8 +179,12 @@ def main():
             continue
         method = req.get("method")
         msg_id = req.get("id")
+        params = req.get("params", {})
+        if not isinstance(params, dict):
+            reply(msg_id, error={"code": -32602, "message": "Params must be an object"})
+            continue
         if method == "initialize":
-            reply(msg_id, {"protocolVersion": req.get("params", {}).get("protocolVersion", "2025-06-18"),
+            reply(msg_id, {"protocolVersion": params.get("protocolVersion", "2025-06-18"),
                            "capabilities": {"tools": {}},
                            "serverInfo": {"name": "agentlane", "version": __version__}})
         elif method == "notifications/initialized" or msg_id is None:
@@ -190,7 +194,6 @@ def main():
         elif method == "tools/list":
             reply(msg_id, {"tools": TOOLS})
         elif method == "tools/call":
-            params = req.get("params", {})
             text, is_error = call(params.get("name"), params.get("arguments"))
             reply(msg_id, {"content": [{"type": "text", "text": text}], "isError": is_error})
         else:

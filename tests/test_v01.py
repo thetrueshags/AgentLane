@@ -101,6 +101,65 @@ class WorkflowTests(unittest.TestCase):
         result = self.fx.data(self.fx.board("alice", "done", task["id"]))
         self.assertEqual(result["task"]["status"], "done")
 
+    def test_install_preserves_custom_hook_and_gate(self):
+        hook = Path(self.a, ".git/hooks/pre-push")
+        hook.write_text("#!/bin/sh\n# existing checks\n", encoding="utf-8")
+        gate = Path(self.a, ".harness/gate/code.sh")
+        original = gate.read_bytes()
+        result = self.fx.board("alice", "install", "--project", check=False)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Existing pre-push hook preserved", self.fx.data(result)["error"])
+        self.assertIn("existing checks", hook.read_text())
+        self.assertEqual(gate.read_bytes(), original)
+
+    def test_local_lock_refuses_competing_process_and_releases(self):
+        repo = self.m.Repo(self.a)
+        with self.m.checkout_lock(repo):
+            env = dict(os.environ)
+            env.pop("AGENTLANE_LOCK_HELD", None)
+            result = subprocess.run([sys.executable, BOARD, "status", "--json"], cwd=self.a,
+                                    env=env, text=True, capture_output=True)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("Another AgentLane command", json.loads(result.stdout)["error"])
+        self.fx.board("alice", "status")
+
+    def test_released_claim_branch_push_is_refused(self):
+        self.fx.board("alice", "install")
+        self.fx.board("alice", "take", "--new", "Auth", "--paths", "src/auth/**")
+        self.commit(self.a, "src/auth/login.py")
+        self.fx.board("alice", "release")
+        result = sh(["git", "push", "origin", "HEAD"], self.a, check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("No active claim", result.stderr)
+
+    def test_rejected_board_update_cannot_publish_revert(self):
+        self.fx.board("alice", "take", "--new", "Auth", "--paths", "src/auth/**")
+        self.commit(self.a, "src/auth/login.py")
+        result = self.fx.data(self.fx.board("alice", "done"))
+        landed = result["landed"]
+        self.fx.reject_next_push_to("refs/heads/board")
+        repo = self.m.Repo(self.b)
+        repo.cfg["land_retries"] = 1
+        args = self.m.build_parser().parse_args(["revert-failed", landed["before"], landed["after"]])
+        with self.assertRaises(self.m.BoardError):
+            self.m.cmd_revert_failed(args, repo)
+        sh(["git", "fetch", "origin", "main"], self.b)
+        self.assertEqual(sh(["git", "rev-parse", "origin/main"], self.b).stdout.strip(), landed["after"])
+        task = self.fx.data(self.fx.board("bob", "show", result["task"]["id"]))
+        self.assertEqual(task["status"], "done")
+
+    def test_expired_claim_cannot_open_review(self):
+        claim = self.fx.data(self.fx.board("alice", "take", "--new", "Auth", "--paths", "src/auth/**"))["claim"]
+        self.commit(self.a, "src/auth/login.py")
+        def expire(b):
+            c = b.claim(claim["id"])
+            c["expires"] = self.m.iso(self.m.now() - dt.timedelta(seconds=1))
+            b.save_claim(c)
+        self.edit_board(expire)
+        repo = self.m.Repo(self.a)
+        with self.assertRaisesRegex(self.m.BoardError, "expired"):
+            self.m.submit_review(self.m.build_parser().parse_args(["done", "--pr"]), repo, self.m.Board(repo), claim)
+
     def test_concurrent_overlapping_claims_have_one_winner(self):
         barrier = threading.Barrier(2, timeout=20)
         original = self.m.Board.commit_and_push

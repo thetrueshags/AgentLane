@@ -53,6 +53,20 @@ class McpWrapperTests(unittest.TestCase):
         status = json.loads(by_id[5]["result"]["content"][0]["text"])
         self.assertEqual(status["my_claims"][0]["title"], "Login page")
 
+    def test_malformed_requests_do_not_stop_server(self):
+        replies = mcp_session(self.a, self.env, [
+            [],
+            {"id": 1, "method": "initialize", "params": []},
+            {"id": 2, "method": "tools/call", "params": {"name": "board_join", "arguments": {}}},
+            {"id": 3, "method": "tools/call", "params": {"name": "board_status", "arguments": []}},
+            {"id": 4, "method": "ping"},
+        ])
+        self.assertEqual(replies[0]["error"]["code"], -32600)
+        self.assertEqual(replies[1]["error"]["code"], -32602)
+        self.assertTrue(replies[2]["result"]["isError"])
+        self.assertTrue(replies[3]["result"]["isError"])
+        self.assertEqual(replies[4]["result"], {})
+
     def test_conflict_is_reported_as_tool_error_not_crash(self):
         self.fx.board("alice", "join", "--name", "alice", "--agent", "claude-code")
         self.fx.board("alice", "take", "--new", "Login page", "--globs", "src/auth/**")
