@@ -36,5 +36,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+      - name: Install the CLI
+        run: python -m pip install -e .
+      - name: Check syntax and formatting
+        run: python tools/check
       - name: Run the test suite
-        run: python -m unittest discover -s tests -v
+        run: python -m unittest discover -v
+      - name: Build and smoke-test the wheel
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
+        run: |
+          python -m pip wheel . --no-deps --wheel-dir "$RUNNER_TEMP/agentlane-wheels"
+          python tools/check-package "$RUNNER_TEMP"/agentlane-wheels/agentlane-*.whl
