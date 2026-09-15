@@ -26,14 +26,14 @@ You can say:
 
 AgentLane source contributors use GitHub issues and pull requests. You do **not** need a board
 membership, a shared claim, write access to this repository, or a running board service.
-Do not run `board init`, `board join`, `board install` or `board done` for source contributions.
+Do not run `agentlane init`, `agentlane join`, `agentlane install` or `agentlane done` for source contributions.
 Those commands are for projects using AgentLane to coordinate their own workers.
 
 ## Development reference
 
 Requirements: Git, Python 3.9 or newer, and Bash. On Windows, install Git for Windows;
 the CLI selects its Bash for gates. AgentLane uses the Python standard library, so the test
-suite needs no package installation. GitHub CLI is optional for opening your contribution PR.
+suite has no runtime dependencies. Install the CLI for development with `python3 -m pip install -e .`. GitHub CLI is optional for opening your contribution PR.
 
 1. Fork the repository to your GitHub account and clone that fork. A contribution fork is a
    workspace for sending changes back to AgentLane; you do not need to maintain a separate product.
@@ -42,11 +42,12 @@ suite needs no package installation. GitHub CLI is optional for opening your con
 4. Run the tests:
 
    ```sh
-   python3 -m unittest discover -s tests -v
+   python3 tools/check
+   python3 -m unittest discover -v
    ```
 
-   On Windows, `python` can be used if it selects the intended interpreter. The tests also
-   invoke `python3`, which must be available. Tests use temporary Git repositories and simulated
+   On Windows, `python` can be used if it selects the intended interpreter. Tests use the
+   selected Python interpreter, temporary Git repositories and simulated
    GitHub PR responses; they do not need access to a live team board or GitHub credentials.
 
 5. Commit and push your branch to your fork, then open a PR with **base repository
@@ -75,6 +76,11 @@ times depend on maintainer availability; use the PR discussion for follow-up and
 
 Please follow our [community guidelines](CODE_OF_CONDUCT.md). Report vulnerabilities through
 the [private security reporting channel](SECURITY.md), rather than a public issue.
+
+## Release preparation
+
+See [release instructions](docs/releasing.md) for local wheel builds and upgrade checks.
+Publishing packages, releases or tags needs explicit maintainer authorization.
 
 ## License
 

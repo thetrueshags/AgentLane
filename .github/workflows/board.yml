@@ -41,11 +41,7 @@ jobs:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
           python3 bin/board --board-dir board-data expire
-          if [ -n "$SLACK_WEBHOOK_URL" ]; then
-            python3 bin/board --board-dir board-data narrate --slack-url "$SLACK_WEBHOOK_URL"
-          else
-            python3 bin/board --board-dir board-data narrate
-          fi
+          python3 bin/board --board-dir board-data narrate
           python3 bin/board --board-dir board-data render
       - name: push board changes
         if: steps.board.outputs.exists == 'true'

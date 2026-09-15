@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+"""Dependency-free syntax, whitespace, JSON and template consistency checks."""
+import ast
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+root = Path(__file__).resolve().parent.parent
+files = list((root / "agentlane").rglob("*.py")) + list((root / "tests").glob("*.py"))
+files += [root / p for p in ("bin/board", "tools/board-mcp", "tools/simulate", "tools/check", "tools/check-package")]
+errors = []
+for path in files:
+    text = path.read_text(encoding="utf-8")
+    try:
+        ast.parse(text, filename=str(path), feature_version=(3, 9))
+    except SyntaxError as error:
+        errors.append(str(error))
+    for number, line in enumerate(text.splitlines(), 1):
+        if line.rstrip() != line or "\t" in line:
+            errors.append("%s:%d: trailing whitespace or tab" % (path.relative_to(root), number))
+for directory in (".harness", ".claude", ".cursor", ".gemini", ".vscode"):
+    for path in (root / directory).rglob("*.json"):
+        if path.name == "member.json":
+            continue
+        try:
+            json.loads(path.read_text(encoding="utf-8"))
+        except ValueError as error:
+            errors.append("%s: %s" % (path.relative_to(root), error))
+for name, source in (("code.sh", ".harness/gate/code.sh"), ("docs.sh", ".harness/gate/docs.sh"),
+                     ("pre-push", ".harness/hooks/pre-push"), ("AGENTS.md", "AGENTS.md"), ("LICENSE", "LICENSE")):
+    if (root / "agentlane/templates" / name).read_text(encoding="utf-8") != (root / source).read_text(encoding="utf-8"):
+        errors.append("Template differs from its source: " + name)
+result = subprocess.run(["git", "diff", "--check"], cwd=root, capture_output=True, text=True)
+if result.returncode:
+    errors.append(result.stdout + result.stderr)
+if errors:
+    print("\n".join(errors), file=sys.stderr)
+    raise SystemExit(1)
+print("Python 3.9 syntax, whitespace, JSON and template checks passed.")

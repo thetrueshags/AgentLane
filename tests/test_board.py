@@ -6,6 +6,7 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -16,7 +17,7 @@ BOARD = os.path.join(ROOT, "bin", "board")
 
 
 def load_board_module():
-    loader = importlib.machinery.SourceFileLoader("boardmod", BOARD)
+    loader = importlib.machinery.SourceFileLoader("boardmod", os.path.join(ROOT, "agentlane", "board.py"))
     spec = importlib.util.spec_from_loader("boardmod", loader)
     mod = importlib.util.module_from_spec(spec)
     loader.exec_module(mod)
@@ -45,7 +46,9 @@ class Fixture:
         sh(["git", "init", "-q", "--bare", "-b", "main", self.origin], self.tmp)
         seed = os.path.join(self.tmp, "seed")
         sh(["git", "clone", "-q", self.origin, seed], self.tmp)
-        for rel in ("bin/board", ".harness/config.json", ".harness/.gitignore", ".harness/hooks/pre-push",
+        shutil.copytree(os.path.join(ROOT, "agentlane"), os.path.join(seed, "agentlane"),
+                        ignore=shutil.ignore_patterns("__pycache__"))
+        for rel in (".gitattributes", ".gitignore", ".mcp.json", ".codex/config.toml", "bin/board", ".harness/config.json", ".harness/.gitignore", ".harness/hooks/pre-push",
                     ".harness/gate/code.sh", ".harness/gate/docs.sh"):
             dst = os.path.join(seed, rel)
             os.makedirs(os.path.dirname(dst), exist_ok=True)
@@ -76,7 +79,7 @@ class Fixture:
         env = {"BOARD_MEMBER": member, "BOARD_AGENT": "test-agent"}
         if extra_env:
             env.update(extra_env)
-        return sh(["python3", BOARD, "--json"] + list(args), path, env=env, check=check, input_text=input_text)
+        return sh([sys.executable, BOARD, "--json"] + list(args), path, env=env, check=check, input_text=input_text)
 
     def data(self, p):
         return json.loads(p.stdout)
@@ -289,7 +292,7 @@ class LandingTests(unittest.TestCase):
         self.commit(self.a, "README.md", "# changed\n")
         p = sh(["git", "push", "-q", "origin", "HEAD:main"], self.a, check=False, env={"BOARD_MEMBER": "alice"})
         self.assertNotEqual(p.returncode, 0)
-        self.assertIn("board done", p.stderr)
+        self.assertIn("agentlane done", p.stderr)
 
     def test_pre_push_hook_blocks_paths_outside_claim_on_claim_branch(self):
         self.fx.board("alice", "take", "--new", "Login page", "--globs", "src/auth/**")
@@ -299,7 +302,7 @@ class LandingTests(unittest.TestCase):
         self.assertIn("outside your claim", p.stderr)
 
     def test_revert_failed_reopens_task(self):
-        self.fx.board("alice", "take", "--new", "Login page", "--globs", "src/auth/**")
+        claim = self.fx.data(self.fx.board("alice", "take", "--new", "Login page", "--globs", "src/auth/**"))["claim"]
         self.commit(self.a, "src/auth/login.py", "def login():\n    return 'broken'\n")
         landed = self.fx.data(self.fx.board("alice", "done"))["landed"]
         res = self.fx.data(self.fx.board("bob", "revert-failed", landed["before"], landed["after"], "--reason", "smoke red"))
@@ -308,6 +311,9 @@ class LandingTests(unittest.TestCase):
         sh(["git", "fetch", "-q", "origin"], self.b)
         p = sh(["git", "show", "origin/main:src/auth/login.py"], self.b)
         self.assertNotIn("broken", p.stdout)
+        self.fx.board("alice", "take", claim["id"])
+        recovered = sh(["git", "show", "HEAD:src/auth/login.py"], self.a)
+        self.assertIn("broken", recovered.stdout, "The original branch must survive landing for repair after rollback")
 
 
 if __name__ == "__main__":
@@ -373,7 +379,7 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(p.returncode, 1)
         err = self.fx.data(p)["error"]
         self.assertIn("expired", err)
-        self.assertIn("board take", err)
+        self.assertIn("agentlane take", err)
 
     def test_revert_is_skipped_when_main_was_already_red_at_base(self):
         self.fx.board("alice", "take", "--new", "Gate", "--globs", ".harness/gate/**")
