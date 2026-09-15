@@ -1,0 +1,34 @@
+name: Bug report
+description: Help reproduce and fix a problem in AgentLane.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Search existing issues first. For security vulnerabilities, use the private reporting link on the issue chooser.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Include what you expected to happen.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: A small example using a disposable repository is especially helpful.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Your setup
+      description: Operating system, Python and Git versions, agent tool, and AgentLane commit or version if known.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output
+      description: Remove credentials and private information before sharing logs.
+      render: text

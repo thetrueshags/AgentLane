@@ -49,7 +49,9 @@ quality. Keep the code gate under three minutes: a slow gate makes agents queue 
 
 ## The main-gate workflow
 
-Every push to `main` runs the full code gate. On failure the workflow first runs the gate at the
+Every push to `main` runs the full code gate. Automatic recovery applies only when the shared
+`board` branch exists; source-only repositories report a failing check without reverting.
+On failure with a board present, the workflow first runs the gate at the
 base of the pushed range; if main was already red there, it leaves the revert to the run that
 broke it, so a clean landing on a red main is never reverted as collateral. Otherwise it reverts
 the exact commit range that was pushed, pushes the revert, reopens the task with the failure

@@ -3,6 +3,9 @@
 ## Choose the operating mode first
 
 When the person is developing AgentLane itself, follow their source-maintenance instructions.
+Read `CONTRIBUTING.md` for contributions to the public AgentLane repository. Use a normal branch
+and a pull request back to `thetrueshags/AgentLane`; outside contributors do not need write access
+or board membership. The source owner may direct ordinary maintenance commits and pushes.
 Do not require team registration, board initialization or claims unless they ask to coordinate
 that maintenance through a shared board. Do not initialize a board merely because this file exists.
 

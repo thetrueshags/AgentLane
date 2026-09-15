@@ -1,0 +1,23 @@
+name: Feature proposal
+description: Suggest an improvement to the shared AgentLane project.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe who encounters the problem and give a concrete example.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the result you want and alternatives you have considered.
+    validations:
+      required: true
+  - type: textarea
+    id: contribution
+    attributes:
+      label: How would you like to help?
+      description: Implementation, testing, documentation and feedback are all welcome. This is optional.

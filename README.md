@@ -2,6 +2,8 @@
 
 **Shared work for people and agents, coordinated through Git boards.**
 
+[MIT license](LICENSE) · [Contribute](CONTRIBUTING.md) · [Report an issue](https://github.com/thetrueshags/AgentLane/issues/new/choose) · [Discussions](https://github.com/thetrueshags/AgentLane/discussions)
+
 AgentLane gives agents a shared backlog, exclusive claims on file paths, durable notes,
 and a checked path from a task branch to a finished change. The board lives in your Git
 repository, so the work and its coordination history travel together. No board server is required.
@@ -9,6 +11,22 @@ repository, so the work and its coordination history travel together. No board s
 Use it for ongoing software development, maintenance, research, documentation, design,
 operations, or a hackathon. One person can direct several agents, or a team can bring different
 tools. Each concurrent worker uses its own clone and a unique board member name.
+
+## Contribute to AgentLane
+
+AgentLane is an open-source project maintained at
+[thetrueshags/AgentLane](https://github.com/thetrueshags/AgentLane). Help improve the shared project:
+report bugs, suggest features, improve documentation, test integrations, or send a pull request.
+We welcome contributions from people working with any agent tool, including first-time contributors.
+
+Start with the [contribution guide](CONTRIBUTING.md), or tell your agent:
+
+> Help me contribute to AgentLane. Read CONTRIBUTING.md, make a focused improvement, and
+> prepare a pull request back to thetrueshags/AgentLane.
+
+Source contributions use GitHub issues and pull requests; no board registration is required.
+MIT allows forks and reuse, and we encourage sharing useful improvements back here so everyone
+benefits. A GitHub fork is also the usual workspace for submitting an upstream pull request.
 
 ## What AgentLane does
 
@@ -46,7 +64,8 @@ the supplied automation workflows and PR integration are specific to GitHub.
 
 1. Start with a committed default branch on the remote.
 2. Integrate `.harness/`, `bin/board`, `tools/board-mcp` and the relevant agent configuration.
-   Merge `AGENTS.md` into existing instructions. Inspect existing hooks before installing.
+   Retain AgentLane's MIT license notice with the copied files. Merge `AGENTS.md` into existing
+   instructions. Inspect existing hooks before installing.
 3. Set `remote`, `main_branch`, `board_branch`, `hot_paths` and the timing settings in
    `.harness/config.json` for the project. Keep the default short claims, or adjust them to
    suit your work cadence. Long-running projects use successive tasks and sessions.
@@ -64,7 +83,7 @@ the supplied automation workflows and PR integration are specific to GitHub.
    landings and PR submissions.
 7. On GitHub, enable the supplied workflows if desired. They target `main` and `board` by
    default; update their branch filters, checkout refs and push targets if you change these.
-   The main gate automatically reverts failed landings; adapt it to your team's branch rules
+   With a shared board initialized, the main gate automatically reverts failed landings; adapt it to your team's branch rules
    and review policy before enabling it. Add `SLACK_WEBHOOK_URL` only for optional notifications.
 
 The `.harness/` directory and `board_*` tool names are retained for compatibility with existing
@@ -102,9 +121,9 @@ and [integration notes](docs/agentlane.md#hooks-in-the-agents).
 
 ## Developing AgentLane itself
 
-An owner editing AgentLane's source can work as a normal software project. Team registration
+Anyone contributing to AgentLane's source can work as a normal software project. Team registration
 and claims apply when using an initialized shared board, not automatically to every source
-maintenance session. See [AGENTS.md](AGENTS.md).
+maintenance session. See [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md).
 
 Run the full test suite:
 
@@ -115,3 +134,8 @@ python3 -m unittest discover -s tests -v
 Tests create temporary Git repositories. They cover claims, collisions, expiry, landing,
 backlog planning, review outcomes, MCP calls and CI board operations. `tools/simulate` exercises
 concurrent workers; historical evaluation reports live in `sim/`.
+
+## License and community
+
+AgentLane is available under the [MIT license](LICENSE). Participation follows our
+[community guidelines](CODE_OF_CONDUCT.md). See [SECURITY.md](SECURITY.md) for private vulnerability reporting.
