@@ -114,10 +114,10 @@ class WorkflowTests(TestCase):
 
     def test_local_lock_refuses_competing_process_and_releases(self):
         repo = self.m.Repo(self.a)
-        with self.m.checkout_lock(repo):
-            env = dict(os.environ)
-            env.pop("AGENTLANE_LOCK_HELD", None)
-            result = sh([sys.executable, BOARD, "status", "--json"], self.a, env=env, check=False)
+        with self.m.checkout_lock(repo), patch.dict(os.environ):
+            # sh merges overrides into the current environment; remove the bypass there.
+            os.environ.pop("AGENTLANE_LOCK_HELD", None)
+            result = sh([sys.executable, BOARD, "status", "--json"], self.a, check=False)
             self.assertEqual(result.returncode, 1)
             self.assertIn("Another AgentLane command", json.loads(result.stdout)["error"])
         self.fx.board("alice", "status")
