@@ -24,7 +24,7 @@ GIT_LOCAL_ENV = {
     "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_QUARANTINE_PATH",
     "GIT_SHALLOW_FILE", "GIT_GRAFT_FILE", "GIT_REPLACE_REF_BASE", "GIT_NO_REPLACE_OBJECTS",
     "GIT_PREFIX", "GIT_INTERNAL_SUPER_PREFIX", "GIT_CEILING_DIRECTORIES", "GIT_DISCOVERY_ACROSS_FILESYSTEM",
-    "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT",
+    "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_NAMESPACE",
 }
 WORKER_CONTEXT_ENV = {"AGENTLANE_LOCK_HELD", "BOARD_LAND", "BOARD_SCAFFOLD", "BOARD_MEMBER",
                       "BOARD_AGENT", "BOARD_REPO_ROOT", "BOARD_PATHS"}
@@ -71,7 +71,7 @@ def git_paths(cwd):
 
     def query(option):
         result = subprocess.run(["git", "rev-parse", option], cwd=cwd, env=env,
-                                capture_output=True, text=True)
+                                capture_output=True, text=True, encoding="utf-8")
         if result.returncode:
             raise BoardError("Worker commands require a local Git working tree: %s" % cwd)
         return Path(cwd, result.stdout.strip()).resolve()

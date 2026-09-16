@@ -136,6 +136,19 @@ class WorkerTests(unittest.TestCase):
                                cwd=self.coordinator, capture_output=True, text=True)
         self.assertIn("not task completion", human.stdout)
 
+    def test_unicode_clone_path_preserves_working_directory(self):
+        clone = self.base / "worker spaces \u03bb"
+        sh(["git", "clone", "-q", str(self.coordinator), str(clone)], str(self.base))
+        wrong_clone = self.base / "worker spaces \u03bb".encode("utf-8").decode("cp1252")
+        sh(["git", "clone", "-q", str(self.coordinator), str(wrong_clone)], str(self.base))
+        result = self.run_worker("import json,os; print(json.dumps(os.getcwd()))", clone=clone)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        receipt = json.loads(result.stdout)
+        self.assertEqual(receipt["status"], "exited")
+        self.assertTrue(receipt["cleanup_confirmed"])
+        self.assertEqual(Path(json.loads(Path(receipt["stdout_log"]).read_text())), clone.resolve())
+        self.assertFalse((clone / ".git/agentlane-worker.json").exists())
+
     def test_failed_exit_and_missing_executable_have_receipts(self):
         failed = self.run_worker("import sys; print('before failure'); sys.exit(7)")
         receipt = json.loads(failed.stdout)
@@ -156,7 +169,7 @@ class WorkerTests(unittest.TestCase):
         removed = {"AGENTLANE_LOCK_HELD", "BOARD_LAND", "BOARD_SCAFFOLD", "BOARD_MEMBER", "BOARD_AGENT",
                    "BOARD_REPO_ROOT", "BOARD_PATHS", "GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE",
                    "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-                   "GIT_QUARANTINE_PATH", "GIT_PREFIX", "GIT_SHALLOW_FILE", "GIT_CONFIG",
+                   "GIT_QUARANTINE_PATH", "GIT_PREFIX", "GIT_SHALLOW_FILE", "GIT_NAMESPACE", "GIT_CONFIG",
                    "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"}
         self.env.update({key: "coordinator-context" for key in removed})
         self.env.update(GIT_DIR=str(self.coordinator / ".git"), GIT_COMMON_DIR=str(self.coordinator / ".git"),
@@ -172,6 +185,7 @@ class WorkerTests(unittest.TestCase):
         code = ("import json,os,subprocess; "
                 "print(json.dumps({'env':{k:os.environ.get(k) for k in %r}, "
                 "'root':subprocess.check_output(['git','rev-parse','--show-toplevel'],text=True).strip(), "
+                "'remote':subprocess.check_output(['git','ls-remote','origin','refs/heads/main'],text=True).strip(), "
                 "'common':subprocess.check_output(['git','rev-parse','--git-common-dir'],text=True).strip()}))"
                 % sorted(removed | set(preserved)))
         result = self.run_worker(code)
@@ -179,6 +193,8 @@ class WorkerTests(unittest.TestCase):
         receipt = json.loads(result.stdout)
         output = json.loads(Path(receipt["stdout_log"]).read_text())
         self.assertEqual(Path(output["root"]), self.clone.resolve())
+        expected_main = sh(["git", "rev-parse", "HEAD"], str(self.coordinator)).stdout.strip()
+        self.assertEqual(output["remote"], expected_main + "\trefs/heads/main")
         self.assertEqual((self.clone / output["common"]).resolve(), self.clone / ".git")
         for key in removed:
             self.assertIsNone(output["env"][key], key)
