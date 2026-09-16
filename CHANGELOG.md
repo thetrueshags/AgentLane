@@ -2,12 +2,13 @@
 
 ## Unreleased
 
-- Optional provider-neutral foreground worker supervision in separate local clones, with
-  atomic local receipts, separate logs, stdin files, timeout/interruption cleanup, common Git
-  directory exclusion, conservative orphan recovery, and read-only MCP worker list/show.
-- Contain Windows workers in kill-on-close jobs before their initial thread resumes, stop
-  ordinary descendants after parent exit, isolate child Git/AgentLane context from the
-  coordinator, and report malformed local receipts as actionable CLI errors.
+- Opt-in independent review for direct landing, governed by exact target main policy; default off.
+- Structured CLI/MCP approvals and withdrawals tied to commit, main base and live lease, with
+  durable implementation provenance and explicit incompatibility with PR mode.
+- Exact expected-main guard on atomic publication, with a separate fast-forward ancestry proof.
+- Guard Git's advertised pre-push input so an up-to-date main cannot publish board completion
+  under a stale base. Chain existing custom hooks and honor their rejection.
+- Refresh review policy after the gate before PR submission, detecting activation during tests.
 
 ## 0.1.0 — prepared, unreleased
 

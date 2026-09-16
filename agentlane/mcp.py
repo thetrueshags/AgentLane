@@ -63,8 +63,16 @@ TOOLS = [
      "inputSchema": {"type": "object", "required": ["text"], "properties": {"text": {"type": "string"}, "task_id": {"type": "string"}}}},
     {"name": "board_done",
      "description": "Land the current claim: rebase on main, run the quality gate, push to main, release the claim. "
-                    "Commit all work first. Runs the gate before either direct landing or PR submission. Honors landing_mode=pr; pr=true also requests review. A PR submission is not a completed task.",
+                    "Commit all work first. Runs the gate before either direct landing or PR submission. Target main require_review needs independent approval of exact commit/base/lease and rejects PR mode. Otherwise honors landing_mode=pr or pr=true. A PR submission is not a completed task.",
      "inputSchema": {"type": "object", "properties": {"task_id": {"type": "string"}, "pr": {"type": "boolean"}}}},
+    {"name": "board_approve",
+     "description": "Approve an exact pushed candidate and remote main base after testing in a clean separate reviewer checkout. Must be registered and never an implementation owner. Engineering retains the live claim.",
+     "inputSchema": {"type": "object", "required": ["task_id", "commit", "base", "evidence"], "properties": {
+         "task_id": {"type": "string"}, "commit": {"type": "string"}, "base": {"type": "string"}, "evidence": {"type": "string"}}}},
+    {"name": "board_withdraw",
+     "description": "Withdraw your structured approval, keeping its history. Supply approval ID if more than one is active.",
+     "inputSchema": {"type": "object", "required": ["task_id"], "properties": {
+         "task_id": {"type": "string"}, "approval": {"type": "string"}}}},
     {"name": "board_handoff",
      "description": "Pass the current claim and its branch to another member by name.",
      "inputSchema": {"type": "object", "required": ["to"], "properties": {"to": {"type": "string"}, "task_id": {"type": "string"}}}},
@@ -152,6 +160,10 @@ def call(name, a):
     if name == "board_done":
         argv = ["done"] + (["--task", a["task_id"]] if a.get("task_id") else []) + (["--pr"] if a.get("pr") else [])
         return board(argv)
+    if name == "board_approve":
+        return board(["approve", a["task_id"], "--commit", a["commit"], "--base", a["base"], "--evidence", a["evidence"]])
+    if name == "board_withdraw":
+        return board(["withdraw", a["task_id"]] + (["--approval", a["approval"]] if a.get("approval") else []))
     if name == "board_handoff":
         return board(["handoff", a["to"]] + (["--task", a["task_id"]] if a.get("task_id") else []))
     if name == "board_extend":

@@ -36,7 +36,8 @@ provide PR review, but they do not own AgentLane's core coordination state.
 
 ## Code and installation
 
-`agentlane/board.py` contains the existing engine. `inspect.py` implements read-only views and
+`agentlane/board.py` contains the existing engine. `review.py` implements independent approvals
+and target-base policy validation. `inspect.py` implements read-only views and
 doctor; `setup.py` adds missing project files. `mcp.py` delegates tools to the same CLI. Packaging
 uses setuptools for the `agentlane` entry point with zero runtime dependencies. `python -m
 agentlane`, `bin/board` and `tools/board-mcp` remain supported.
@@ -53,7 +54,7 @@ directory. An OS lock serializes CLI commands in the same checkout; process exit
 Different workers still need separate clones.
 
 - `tasks/ID.json`: title, description, kind, state, paths (`globs`), owner, created/updated time,
-  last branch and landing/PR history.
+  last branch, implementation owners, structured approvals and landing/PR history.
 - `claims/ID.json`: owner, agent, branch, base, paths, timestamps, TTL, extensions, hot flag and
   a unique lease token for new claims.
 - `members/NAME.json`: worker identity.
@@ -107,8 +108,28 @@ review and another attempt. Missing and failing gates stop landing.
 After the gate, AgentLane fetches the board and verifies owner, lease, paths and expiry. It prepares
 completion and claim removal, then sends the work SHA to main and the board SHA to board in one
 `git push --atomic`. Both refs advance or neither does. Competing updates cause another rebase
-and gate attempt. No force push is used. Remotes without atomic-push support fail clearly;
-PR mode is the alternative.
+and gate attempt. Main uses an explicit `--force-with-lease=refs/heads/MAIN:BEFORE` solely as
+an exact expected-ref guard, **after a separate ancestry proof that BEFORE is an ancestor of
+the candidate**. Git skips lease checks for up-to-date refs, so a mandatory temporary pre-push
+guard also requires main to appear as a real update in Git's advertised push input, with exactly
+BEFORE as its old SHA and the candidate as its new SHA. An omitted main update aborts before
+board can publish. Movement after advertisement is rejected by the server's old-ref check.
+This cannot rewrite history: movement of main rejects the push even when main reaches an
+ancestor of the candidate or the exact candidate itself. There is no unconditional force flag.
+Remotes without atomic-push support fail clearly; PR mode is an alternative only when
+independent review is disabled.
+
+The guard uses a hooks directory scoped to that single Git invocation. It resolves the existing
+effective pre-push hook first, honoring custom `core.hooksPath` (including relative paths), and
+runs an executable hook with its original arguments and a copy of the full input before its own
+checks. A user hook's rejection stops publication without retrying past the rejection. The
+original hook and persistent Git configuration are unchanged; temporary files are removed.
+This uses a shell hook and does not depend on the newer `git hook run` command.
+
+If another process publishes the exact candidate before or during the push, the board is not
+silently marked done. A retry that observes main already at the candidate reports `nothing to
+land`; an exhausted retry budget reports contention. Both retain the claim and approval history
+for inspection of remote history. AgentLane reports no completion for its rejected publication.
 
 A process can die after a successful push but before displaying success. Inspect `agentlane show
 ID` and remote history before retrying: the atomic completion is the receipt. Local work branches
@@ -119,6 +140,50 @@ PR mode runs pre-submission checks, pushes the branch and opens a draft PR. Fail
 the claim. Successful submission moves the task to review and releases ownership. The host's merge
 workflow then applies. `sync --reviews` verifies merged commits against remote main or reopens
 closed PRs. It is explicit, not a background service.
+
+### Opt-in independent review
+
+`require_review` defaults to the JSON boolean `false`. Direct landing reads this policy from
+the **exact fetched target main commit**, not from the candidate checkout. Enabling the policy
+in a candidate is a bootstrap change: it becomes authoritative only once landed. Disabling
+an already enabled policy still needs approval under the old base. PR mode and `done --pr`
+fail explicitly when target main requires review. PR submission refreshes target policy again
+after its gate to detect activation during tests. PR creation and later host merges are not
+atomic with main's policy; AgentLane does not enforce host-side merges.
+
+New tasks record versioned implementation provenance from their first claim onward. Every
+owner acquired through take, recovery or handoff remains in that list across releases,
+expiry, failed checkout recovery and rollback. A task creator is not an implementation owner
+until taking or receiving a claim. Handoffs rotate the lease token. Missing legacy provenance
+is never inferred or upgraded on re-take: such tasks remain readable and usable with the
+default policy, but cannot satisfy required review. Finish legacy work before enabling the
+policy, or arrange an explicit maintainer audit of provenance; there is no automatic migration.
+
+`approve TASK --commit FULL_SHA --base FULL_SHA --evidence TEXT` requires a registered reviewer
+who has never owned implementation of that task. In a separate clone/worktree with the reviewer
+identity, they test a clean checkout of the exact pushed claim branch tip, verify the exact
+remote main base is its ancestor, and supply test results as evidence. The command checks those
+refs, live lease and path scope. It does not execute tests itself: the reviewer must run the
+appropriate tests before approving. Notes are never approvals.
+
+Approval records retain ID, reviewer, timestamp, candidate/base SHAs, evidence and claim identity
+(owner, lease, branch, paths and hot flag). `withdraw TASK [--approval ID]` records a withdrawal
+by the original reviewer without deleting the approval. Ambiguous withdrawals require an ID.
+Added metadata is strictly validated; malformed booleans, records and provenance fail closed.
+
+After each rebase and gate, `done` checks the fresh board for an unwithdrawn independent approval
+of that exact HEAD, base and live claim. It records the approval ID in landing history. The
+atomic board update rejects intervening withdrawal, handoff or recovery; the exact main guard
+rejects base movement. Every contention retry repeats rebase, gate and approval checks. New
+commits, amendments, a different base or lease require a fresh approval. Heartbeats do not
+change the lease identity. Engineering keeps the claim while QA reviews, then engineering lands;
+handing implementation to QA makes QA an owner and therefore ineligible to approve.
+
+This is a cooperative Git protocol. Registered member names are not authenticated human
+identities, evidence is reviewer supplied, and writers able to bypass the CLI or edit board
+history can bypass policy. Use host permissions for adversarial enforcement. Existing CI
+`revert-failed` remains an automatic recovery operation, preserves review/provenance history,
+and uses the same atomic fast-forward and expected-main guard.
 
 ## Failure recovery
 

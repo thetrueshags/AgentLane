@@ -19,7 +19,11 @@ missing configuration using `agentlane mcp`. Existing files are preserved; integ
 entry into them when needed. Launch in the project directory, or set `BOARD_REPO_ROOT` explicitly.
 
 Tools include board_doctor, board_list, board_show, board_add, board_take, board_note, board_sync,
-board_done, board_release and the existing recovery/review tools. Old names remain valid.
+board_done, board_release, board_approve, board_withdraw and the existing recovery/review tools.
+`board_approve` requires `task_id`, full `commit` and `base` SHAs, and test `evidence`;
+`board_withdraw` accepts `task_id` and an optional `approval` ID. These use the same independent
+review checks as the CLI, including exact checkout, registration and retained implementation
+owners. Old names remain valid.
 JSON output comes from the same commands that humans run in a terminal.
 
 Optional [local foreground supervision](workers.md) runs an explicit provider-neutral argv

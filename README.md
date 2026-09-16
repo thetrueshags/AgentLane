@@ -129,6 +129,13 @@ Successful submission releases ownership into review; after merging or closing, 
 `agentlane sync --reviews`. GitHub CLI/authentication are needed only for PR operations.
 PR submission is not completion. Core direct landing works with a writable Git remote.
 
+For independent review before **direct** landing, opt in with `"require_review": true`.
+The policy is read from exact target main and takes effect after the enabling change lands.
+A registered reviewer who has never owned implementation tests the pushed commit in a separate
+clean checkout and records `approve TASK --commit FULL_SHA --base FULL_SHA --evidence TEXT`.
+Engineering keeps the claim and runs `done`; changed commits, bases or leases need fresh approval.
+PR mode is incompatible with this policy. See the [review workflow](docs/example.md#optional-independent-review).
+
 ## Integrations and optional automation
 
 Claude Code, Codex, Cursor, Gemini CLI, VS Code/Copilot, OpenCode and shell agents all follow
