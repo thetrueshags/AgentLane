@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Opt-in independent review for direct landing, governed by exact target main policy; default off.
+- Structured CLI/MCP approvals and withdrawals tied to commit, main base and live lease, with
+  durable implementation provenance and explicit incompatibility with PR mode.
+- Exact expected-main guard on atomic publication, with a separate fast-forward ancestry proof.
+
 ## 0.1.0 — prepared, unreleased
 
 - Installable CLI, Python module entry point and shared version metadata; no runtime dependencies.

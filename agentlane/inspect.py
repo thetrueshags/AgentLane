@@ -53,6 +53,15 @@ def cmd_show(args, repo):
         lines.append("PR: " + t["pr"])
     if t.get("blocker"):
         lines.append("Blocker: " + t["blocker"])
+    if "implementation" in t:
+        lines.append("Implementation owners: " + (", ".join(t["implementation"]["owners"]) or "none yet"))
+    if t.get("approvals"):
+        lines.append("Approval history (eligibility is checked again at landing):")
+        for approval in t["approvals"]:
+            lines.append("  %s %s by %s at %s" % (approval["id"],
+                         "withdrawn" if "withdrawal" in approval else "recorded", approval["reviewer"], approval["timestamp"]))
+            lines.append("    Commit: %s; base: %s" % (approval["commit"], approval["base"]))
+            lines.append("    Evidence: " + approval["evidence"])
     lines.append("Notes:")
     lines.extend("  %s %s [%s] %s" % (n["ts"], n["member"], n["kind"], n["text"]) for n in t["notes"])
     core.out(args, "\n".join(lines), t)

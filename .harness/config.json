@@ -3,6 +3,7 @@
   "main_branch": "main",
   "board_branch": "board",
   "landing_mode": "direct",
+  "require_review": false,
   "ttl_minutes": 45,
   "max_extensions": 2,
   "hot_ttl_minutes": 10,

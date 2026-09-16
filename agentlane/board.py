@@ -44,6 +44,7 @@ DEFAULTS = {
     "push_retries": 8,
     "heartbeat_min_seconds": 60,
     "landing_mode": "direct",
+    "require_review": False,
 }
 
 TASK_KINDS = ["code", "docs", "test", "research", "design", "ops", "other"]
@@ -81,6 +82,8 @@ def normalize_paths(paths):
 
 
 def validate_config(cfg):
+    if type(cfg["require_review"]) is not bool:
+        raise BoardError("Configuration require_review must be a boolean")
     for key in ("ttl_minutes", "hot_ttl_minutes", "stall_minutes", "stall_release_minutes", "push_retries", "land_retries"):
         value = cfg[key]
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
@@ -109,6 +112,9 @@ def validate_record(kind, record):
     validate_id(record.get("id", record.get("name")))
     if kind == "tasks" and record["status"] not in ("open", "claimed", "blocked", "review", "done"):
         raise BoardError("Unknown task state %r" % record["status"])
+    if kind == "tasks":
+        from agentlane.review import validate_task_review
+        validate_task_review(record)
     if kind in ("tasks", "claims"):
         paths = record.get("globs", [])
         if not isinstance(paths, list) or (kind == "claims" and not paths):
@@ -720,7 +726,8 @@ def cmd_add(args, repo):
     def mutate(b):
         t = {"id": b.next_id(), "title": title, "description": args.description or "",
              "kind": args.kind or "other", "globs": globs, "status": "open", "owner": None,
-             "created_by": repo.member, "created": iso(now())}
+             "created_by": repo.member, "created": iso(now()),
+             "implementation": {"version": 1, "owners": []}}
         b.save_task(t)
         b.event(repo.member, "add", "%s added '%s' to the backlog" % (repo.member, title),
                 task=t["id"], agent=repo.agent)
@@ -841,7 +848,8 @@ def cmd_take(args, repo):
                 raise BoardError("a new task needs --globs, the paths it will touch (for a docs task: docs/pitch/**)")
             tid = b.next_id()
             t = {"id": tid, "title": args.new, "kind": args.kind or ("docs" if not paths_outside(globs, repo.cfg["docs_globs"]) else "code"),
-                 "globs": globs, "status": "open", "owner": None, "created_by": me, "created": iso(now())}
+                 "globs": globs, "status": "open", "owner": None, "created_by": me, "created": iso(now()),
+                 "implementation": {"version": 1, "owners": []}}
             b.save_task(t)
         else:
             t = b.task(args.task)
@@ -886,6 +894,8 @@ def cmd_take(args, repo):
         b.save_claim(c)
         t["status"] = "claimed"
         t["owner"] = me
+        from agentlane.review import record_owner
+        record_owner(t, me)
         t["globs"] = globs
         b.save_task(t)
         b.event(me, "take", "%s took '%s' (%s) for %d min" % (me, t["title"], ", ".join(globs), ttl),
@@ -1046,11 +1056,15 @@ def cmd_handoff(args, repo):
             raise BoardError("no member named %s. Members: %s" % (to, ", ".join(m["name"] for m in b.members())))
         c = my_claim(b, repo, args.task)
         c["owner"] = to
+        c["lease"] = uuid.uuid4().hex
         c["agent"] = None
         c["last_heartbeat"] = iso(now())
         b.save_claim(c)
         t = b.task(c["id"])
         t["owner"] = to
+        from agentlane.review import record_owner
+        record_owner(t, me)
+        record_owner(t, to)
         if t["status"] == "blocked":
             t["status"] = "claimed"
         b.save_task(t)
@@ -1235,15 +1249,23 @@ def cmd_sync_reviews(args, repo):
     out(args, "updated %d reviewed task(s)" % len(changed), {"updated": changed})
 
 
-def push_main_and_board(repo, board, message):
+def push_main_and_board(repo, board, message, before, head=None, claim=None, claim_cfg=None):
     """Publish both prepared commits or neither; callers replay on contention."""
     board.render()
     git(["add", "-A"], cwd=board.dir)
     git(["-c", "user.name=board", "-c", "user.email=board@agentlane.local",
          "commit", "-q", "-m", message], cwd=board.dir)
     board_head = git(["rev-parse", "HEAD"], cwd=board.dir).stdout.strip()
-    head = repo.git(["rev-parse", "HEAD"]).stdout.strip()
-    p = repo.git(["push", "--atomic", "-q", repo.remote,
+    current_head = repo.git(["rev-parse", "HEAD"]).stdout.strip()
+    if head is not None and current_head != head:
+        raise BoardError("HEAD changed after the gate; run agentlane done again")
+    head = current_head
+    # The lease is only an exact old-ref guard. Prove FF separately: never rewrite history.
+    if repo.git(["merge-base", "--is-ancestor", before, head], check=False).returncode:
+        raise BoardError("Refusing non-fast-forward main update")
+    if claim is not None:
+        require_live(claim, claim_cfg or repo.cfg)
+    p = repo.git(["push", "--atomic", "-q", "--force-with-lease=refs/heads/%s:%s" % (repo.main, before), repo.remote,
                   head + ":refs/heads/" + repo.main, board_head + ":refs/heads/" + board.branch],
                  check=False, env={"BOARD_LAND": "1"})
     if p.returncode == 0:
@@ -1256,6 +1278,7 @@ def push_main_and_board(repo, board, message):
 
 
 def cmd_done(args, repo):
+    from agentlane.review import fetch_target, require_approval
     board = Board(repo, args.board_dir)
     me, agent = repo.member, repo.agent
     if repo.git(["status", "--porcelain", "--untracked-files=no"]).stdout.strip():
@@ -1276,8 +1299,10 @@ def cmd_done(args, repo):
     attempts = int(repo.cfg["land_retries"])
     log = []
     for attempt in range(1, attempts + 1):
-        repo.git(["fetch", "-q", repo.remote, repo.main])
-        p = repo.git(["rebase", "-q", repo.remote_main()], check=False)
+        before, target_cfg = fetch_target(repo)
+        if target_cfg["require_review"] and (args.pr or repo.cfg["landing_mode"] == "pr" or target_cfg["landing_mode"] == "pr"):
+            raise BoardError("require_review is incompatible with PR mode/done --pr; host merges are not enforced")
+        p = repo.git(["rebase", "-q", before], check=False)
         if p.returncode != 0:
             repo.git(["rebase", "--abort"], check=False)
             conflict_files = re.findall(r"CONFLICT.*?: (.*)", p.stdout + p.stderr)
@@ -1288,7 +1313,7 @@ def cmd_done(args, repo):
                       lambda b: b.event(me, "conflict", "%s hit a rebase conflict landing '%s'" % (me, t["title"]),
                                         task=t["id"], agent=agent))
             raise BoardError(msg)
-        paths = changed_paths(repo, repo.remote_main())
+        paths = changed_paths(repo, before)
         if not paths:
             raise BoardError("nothing to land: no changes relative to %s" % repo.main)
         outside = paths_outside(paths, c["globs"])
@@ -1315,7 +1340,6 @@ def cmd_done(args, repo):
         if args.pr or repo.cfg["landing_mode"] == "pr":
             submit_review(args, repo, board, c)
             return
-        before = repo.git(["rev-parse", repo.remote_main()]).stdout.strip()
         head = repo.git(["rev-parse", "HEAD"]).stdout.strip()
         board.sync()
         current = my_claim(board, repo, c["id"])
@@ -1323,6 +1347,9 @@ def cmd_done(args, repo):
             raise BoardError("Claim changed while running the gate; inspect agentlane show before retrying.")
         landed = {"before": before, "after": head, "paths": paths, "tier": tier}
         t2 = board.task(c["id"])
+        if target_cfg["require_review"]:
+            approval = require_approval(board, t2, current, head, before, target_cfg)
+            landed["approval"] = approval["id"]
         t2["status"] = "done"
         t2["landed"] = (t2.get("landed") or []) + [landed]
         t2["last_branch"] = c["branch"]
@@ -1330,7 +1357,8 @@ def cmd_done(args, repo):
         board.drop_claim(c["id"])
         board.event(me, "done", "%s landed '%s' on %s (%s, %d files)" %
                     (me, t2["title"], repo.main, head[:8], len(paths)), task=c["id"], agent=agent, sha=head)
-        if push_main_and_board(repo, board, "board: %s landed %s" % (me, c["id"])):
+        if push_main_and_board(repo, board, "board: %s landed %s" % (me, c["id"]), before,
+                               head, current, target_cfg if target_cfg["require_review"] else repo.cfg):
             break
         landed = None
     if not landed:
@@ -1487,6 +1515,7 @@ def cmd_revert_failed(args, repo):
     for attempt in range(int(repo.cfg["land_retries"])):
         repo.git(["fetch", "-q", repo.remote, repo.main])
         repo.git(["checkout", "-q", "--detach", repo.remote_main()])
+        expected_main = repo.git(["rev-parse", "HEAD"]).stdout.strip()
         board.sync()
         hit = mutate(board)
         p = repo.git(["-c", "user.name=board", "-c", "user.email=board@agentlane.local",
@@ -1494,7 +1523,7 @@ def cmd_revert_failed(args, repo):
         if p.returncode != 0:
             repo.git(["revert", "--abort"], check=False)
             raise BoardError("Automatic revert failed; remote unchanged. Inspect main and resolve the conflict:\n" + p.stderr)
-        if push_main_and_board(repo, board, "board: reverted %s" % after[:8]):
+        if push_main_and_board(repo, board, "board: reverted %s" % after[:8], expected_main):
             break
     else:
         raise BoardError("Competing pushes prevented recovery; no recovery was published. Retry revert-failed from a fresh checkout.")
@@ -1656,10 +1685,24 @@ def build_parser():
     s.add_argument("--force", action="store_true", help="recover another worker's stale claim; never steals a live claim")
     s.set_defaults(fn=cmd_release)
 
-    s = sub.add_parser("done", help="rebase, run the gate, then land or submit a PR per project policy")
+    from agentlane.review import cmd_approve, cmd_withdraw
+    s = sub.add_parser("approve", help="independently approve an exact pushed commit/base after testing in a clean reviewer checkout")
+    s.add_argument("task")
+    s.add_argument("--commit", required=True, help="full candidate commit SHA; must be checked out")
+    s.add_argument("--base", required=True, help="full exact remote main SHA")
+    s.add_argument("--evidence", required=True, help="tests performed and results; reviewer must test this exact commit")
+    s.set_defaults(fn=cmd_approve)
+
+    s = sub.add_parser("withdraw", help="withdraw your structured approval, preserving its history")
+    s.add_argument("task")
+    s.add_argument("--approval", help="approval ID; required if you have multiple active approvals")
+    s.set_defaults(fn=cmd_withdraw)
+
+    s = sub.add_parser("done", help="rebase, gate and land; target require_review needs exact independent approval",
+                       description="Rebase and gate before landing. Target main require_review requires independent approval of the exact commit/base/lease and rejects PR mode.")
     s.add_argument("task_id", nargs="?", help="task ID; defaults to your current claim")
     s.add_argument("--task", help="legacy task ID option")
-    s.add_argument("--pr", action="store_true", help="open a draft PR instead of landing directly")
+    s.add_argument("--pr", action="store_true", help="open a draft PR; incompatible with target require_review")
     s.set_defaults(fn=cmd_done)
 
     s = sub.add_parser("gate", help="run the quality gate for your current changes")

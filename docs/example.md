@@ -83,3 +83,48 @@ decisions with `agentlane show AL-1`.
 
 The same flow works with the `board_*` MCP tools. In PR mode, `done` submits review work;
 completion appears after merging and `agentlane sync --reviews`.
+
+## Optional independent review
+
+First land `"require_review": true` in `.harness/config.json`; only then does the setting require
+approvals. Existing legacy tasks without complete implementation provenance must be resolved
+before switching. PR mode is incompatible with this policy.
+
+Alice keeps her implementation claim and prepares its final candidate:
+
+```sh
+git fetch origin main
+git rebase origin/main
+agentlane gate --all
+git push origin HEAD
+git rev-parse HEAD
+git rev-parse origin/main
+agentlane heartbeat
+```
+
+She gives Bob the two full SHAs as `CANDIDATE_SHA` and `BASE_SHA`. Bob uses his own registered
+clone (or a separate clean review worktree with his reviewer identity), fetches the claim
+branch and checks out its exact commit. For example, for Alice's `claim/AL-1-auth` branch:
+
+```sh
+git fetch origin main claim/AL-1-auth
+git checkout --detach CANDIDATE_SHA
+git status --porcelain
+git rev-parse origin/main
+agentlane gate --all
+# Run the task's specific acceptance tests too; record actual results below.
+agentlane approve AL-1 --commit CANDIDATE_SHA --base BASE_SHA --evidence "Full gate and login acceptance tests passed"
+```
+
+The SHA placeholders must be replaced with full commit IDs. Bob must test the exact clean
+candidate, verify the base, and describe tests actually performed. Bob does not take Alice's
+task or receive a handoff. Alice continues heartbeats during review, then runs:
+
+```sh
+agentlane done AL-1
+```
+
+If rebase changes the commit/base or the lease changes, Alice pushes the updated candidate and
+Bob repeats testing and approval. Bob can revoke his approval with `agentlane withdraw AL-1`;
+when several of his approvals are active, add `--approval APPROVAL_ID`. Old records remain in
+task history. MCP clients use `board_approve` and `board_withdraw` with the same fields.
