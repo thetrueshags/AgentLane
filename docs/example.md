@@ -94,7 +94,7 @@ Alice keeps her implementation claim and prepares its final candidate:
 
 ```sh
 git fetch origin main
-git rebase origin/main
+git merge --no-edit origin/main
 agentlane gate --all
 git push origin HEAD
 git rev-parse HEAD
@@ -124,7 +124,10 @@ task or receive a handoff. Alice continues heartbeats during review, then runs:
 agentlane done AL-1
 ```
 
-If rebase changes the commit/base or the lease changes, Alice pushes the updated candidate and
-Bob repeats testing and approval. Bob can revoke his approval with `agentlane withdraw AL-1`;
+An ordinary merge lets an already-pushed claim advance without rewriting its history.
+`done` preserves that exact reviewed SHA while it contains current main. If main advances,
+`done` rebases as needed; a changed commit/base or lease requires a fresh approval.
+Alice pushes the updated candidate and Bob repeats testing and approval.
+Bob can revoke his approval with `agentlane withdraw AL-1`;
 when several of his approvals are active, add `--approval APPROVAL_ID`. Old records remain in
 task history. MCP clients use `board_approve` and `board_withdraw` with the same fields.

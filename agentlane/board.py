@@ -1370,8 +1370,13 @@ def cmd_done(args, repo):
         before, target_cfg = fetch_target(repo)
         if target_cfg["require_review"] and (args.pr or repo.cfg["landing_mode"] == "pr" or target_cfg["landing_mode"] == "pr"):
             raise BoardError("require_review is incompatible with PR mode/done --pr; host merges are not enforced")
-        p = repo.git(["rebase", "-q", before], check=False)
-        if p.returncode != 0:
+        # A reviewed merge already containing current main is a valid FF
+        # candidate. Plain rebase would flatten it and invalidate its exact SHA.
+        ancestry = repo.git(["merge-base", "--is-ancestor", before, "HEAD"], check=False)
+        if ancestry.returncode not in (0, 1):
+            raise BoardError("Cannot establish candidate ancestry against fetched main")
+        p = repo.git(["rebase", "-q", before], check=False) if ancestry.returncode == 1 else None
+        if p is not None and p.returncode != 0:
             repo.git(["rebase", "--abort"], check=False)
             conflict_files = re.findall(r"CONFLICT.*?: (.*)", p.stdout + p.stderr)
             msg = ("rebase onto %s hit a conflict%s. Resolve it in your worktree (git rebase %s), then run "
@@ -1620,27 +1625,48 @@ def cmd_check_push(args, repo):
             continue
         if remote_ref == board_ref or local_sha == "0" * 40:
             continue
+        pushed_branch = remote_ref.replace("refs/heads/", "")
         base = remote_sha if remote_sha != "0" * 40 else repo.remote_main()
+        cfg = repo.cfg
+        board = None
+        if pushed_branch.startswith("claim/"):
+            from agentlane.review import fetch_target
+            board = Board(repo, args.board_dir)
+            board.sync()
+            mine = [c for c in board.claims_of(repo.member) if c["branch"] == pushed_branch]
+            if not mine:
+                raise BoardError("No active claim owned by %s permits pushing %s. Inspect agentlane status or recover the task first." % (repo.member, pushed_branch))
+            target, cfg = fetch_target(repo)
+            require_live(mine[0], cfg)
+            # Count all outstanding claim work, not the increment from its last
+            # push (which can include unrelated work merged from main). A stale
+            # candidate uses its shared main ancestor, so absent newer main work
+            # is not mistaken for claimant deletions. Never guess on ambiguity.
+            ancestry = repo.git(["merge-base", "--all", target, local_sha], check=False)
+            bases = ancestry.stdout.split()
+            if ancestry.returncode or len(bases) != 1:
+                raise BoardError("Cannot establish a unique claim ancestor against fetched main; push refused")
+            base = bases[0]
         try:
             paths = changed_paths(repo, base, local_sha)
         except BoardError:
-            continue
-        stat = repo.git(["diff", "--shortstat", base, local_sha], check=False).stdout
-        nums = [int(x) for x in re.findall(r"(\d+) (?:insertion|deletion)", stat)]
-        total = sum(nums)
-        if total >= int(repo.cfg["refuse_lines"]) and not os.environ.get("BOARD_SCAFFOLD"):
-            raise BoardError("push has %d changed lines; over %d. Split the claim, or set BOARD_SCAFFOLD=1 "
-                             "for a genuine scaffold" % (total, repo.cfg["refuse_lines"]))
-        if total >= int(repo.cfg["warn_lines"]):
-            sys.stderr.write("board: %d changed lines is large for one claim; consider landing sooner\n" % total)
-        board = Board(repo, args.board_dir)
-        pushed_branch = remote_ref.replace("refs/heads/", "")
-        try:
-            board.sync()
-        except BoardError:
-            if pushed_branch.startswith("claim/"):
+            if board is not None:
                 raise
             continue
+        stat = repo.git(["diff", "--shortstat", base, local_sha], check=board is not None).stdout
+        nums = [int(x) for x in re.findall(r"(\d+) (?:insertion|deletion)", stat)]
+        total = sum(nums)
+        if total >= int(cfg["refuse_lines"]) and not os.environ.get("BOARD_SCAFFOLD"):
+            raise BoardError("push has %d changed lines; over %d. Split the claim, or set BOARD_SCAFFOLD=1 "
+                             "for a genuine scaffold" % (total, cfg["refuse_lines"]))
+        if total >= int(cfg["warn_lines"]):
+            sys.stderr.write("board: %d changed lines is large for one claim; consider landing sooner\n" % total)
+        if board is None:
+            board = Board(repo, args.board_dir)
+            try:
+                board.sync()
+            except BoardError:
+                continue
         mine = [c for c in board.claims_of(repo.member) if c["branch"] == pushed_branch]
         if not mine:
             if pushed_branch.startswith("claim/"):
@@ -1648,10 +1674,10 @@ def cmd_check_push(args, repo):
             sys.stderr.write("board: pushing %s without a matching claim; the board will not track it\n" % pushed_branch)
             continue
         c = mine[0]
-        require_live(c, repo.cfg)
+        require_live(c, cfg)
         outside = paths_outside(paths, c["globs"])
         if not c.get("hot"):
-            outside = sorted(set(outside) | set(paths_matching(paths, repo.cfg["hot_paths"])))
+            outside = sorted(set(outside) | set(paths_matching(paths, cfg["hot_paths"])))
         if outside:
             raise BoardError("paths outside your claim (%s): %s" % (", ".join(c["globs"]), ", ".join(outside)))
     print("board: push ok")
@@ -1773,8 +1799,8 @@ def build_parser():
     s.add_argument("--approval", help="approval ID; required if you have multiple active approvals")
     s.set_defaults(fn=cmd_withdraw)
 
-    s = sub.add_parser("done", help="rebase, gate and land; target require_review needs exact independent approval",
-                       description="Rebase and gate before landing. Target main require_review requires independent approval of the exact commit/base/lease and rejects PR mode.")
+    s = sub.add_parser("done", help="update, gate and land; target require_review needs exact independent approval",
+                       description="Rebase only if current main is not already an ancestor; otherwise preserve the candidate SHA. Gate before landing. Target main require_review requires independent approval of the exact commit/base/lease and rejects PR mode.")
     s.add_argument("task_id", nargs="?", help="task ID; defaults to your current claim")
     s.add_argument("--task", help="legacy task ID option")
     s.add_argument("--pr", action="store_true", help="open a draft PR; incompatible with target require_review")

@@ -99,11 +99,22 @@ require ownership of both old and new locations.
 Hot files need a short `--hot` claim containing only hot paths; these cannot be extended.
 Normal durations and extension limits come from `.harness/config.json`.
 
+The pre-push hook fetches target main for claim branches and measures paths and total
+changed lines from its unique merge base with the candidate. Already-landed main work
+imported by an ordinary merge is excluded; edits or reversions of that work still count.
+An outdated candidate uses its shared ancestor with main, so newer main work it has not
+imported is not counted as deletions. Repeated pushes count the full outstanding claim
+diff, using target main's size limits and hot paths. Missing ownership, failed target
+fetches and missing or ambiguous ancestry refuse the push. Nonclaim branches retain
+their existing incremental push checks.
+
 ## Landing serialization
 
-Direct `done` requires a clean tracked worktree on the owned branch. It fetches main, rebases,
-validates paths and runs the repository gate. A gate changing tracked files or HEAD requires
-review and another attempt. Missing and failing gates stop landing.
+Direct `done` requires a clean tracked worktree on the owned branch. It fetches main and
+rebases only when that main commit is not already an ancestor of the candidate. An
+already-current candidate, including an ordinary merge, retains its exact SHA. It then
+validates paths and runs the repository gate. A gate changing tracked files or HEAD
+requires review and another attempt. Missing and failing gates stop landing.
 
 After the gate, AgentLane fetches the board and verifies owner, lease, paths and expiry. It prepares
 completion and claim removal, then sends the work SHA to main and the board SHA to board in one
@@ -174,8 +185,8 @@ Added metadata is strictly validated; malformed booleans, records and provenance
 After each rebase and gate, `done` checks the fresh board for an unwithdrawn independent approval
 of that exact HEAD, base and live claim. It records the approval ID in landing history. The
 atomic board update rejects intervening withdrawal, handoff or recovery; the exact main guard
-rejects base movement. Every contention retry repeats rebase, gate and approval checks. New
-commits, amendments, a different base or lease require a fresh approval. Heartbeats do not
+rejects base movement. Every contention retry fetches main, rebases if needed, and repeats
+gate and approval checks. New commits, amendments, a different base or lease require a fresh approval. Heartbeats do not
 change the lease identity. Engineering keeps the claim while QA reviews, then engineering lands;
 handing implementation to QA makes QA an owner and therefore ineligible to approve.
 
