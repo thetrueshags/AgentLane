@@ -110,10 +110,26 @@ completion and claim removal, then sends the work SHA to main and the board SHA 
 `git push --atomic`. Both refs advance or neither does. Competing updates cause another rebase
 and gate attempt. Main uses an explicit `--force-with-lease=refs/heads/MAIN:BEFORE` solely as
 an exact expected-ref guard, **after a separate ancestry proof that BEFORE is an ancestor of
-the candidate**. This cannot rewrite history: movement of main rejects the push, even when
-the new main is already an ancestor of the candidate. There is no unconditional force flag.
+the candidate**. Git skips lease checks for up-to-date refs, so a mandatory temporary pre-push
+guard also requires main to appear as a real update in Git's advertised push input, with exactly
+BEFORE as its old SHA and the candidate as its new SHA. An omitted main update aborts before
+board can publish. Movement after advertisement is rejected by the server's old-ref check.
+This cannot rewrite history: movement of main rejects the push even when main reaches an
+ancestor of the candidate or the exact candidate itself. There is no unconditional force flag.
 Remotes without atomic-push support fail clearly; PR mode is an alternative only when
 independent review is disabled.
+
+The guard uses a hooks directory scoped to that single Git invocation. It resolves the existing
+effective pre-push hook first, honoring custom `core.hooksPath` (including relative paths), and
+runs an executable hook with its original arguments and a copy of the full input before its own
+checks. A user hook's rejection stops publication without retrying past the rejection. The
+original hook and persistent Git configuration are unchanged; temporary files are removed.
+This uses a shell hook and does not depend on the newer `git hook run` command.
+
+If another process publishes the exact candidate before or during the push, the board is not
+silently marked done. A retry that observes main already at the candidate reports `nothing to
+land`; an exhausted retry budget reports contention. Both retain the claim and approval history
+for inspection of remote history. AgentLane reports no completion for its rejected publication.
 
 A process can die after a successful push but before displaying success. Inspect `agentlane show
 ID` and remote history before retrying: the atomic completion is the receipt. Local work branches
@@ -131,7 +147,9 @@ closed PRs. It is explicit, not a background service.
 the **exact fetched target main commit**, not from the candidate checkout. Enabling the policy
 in a candidate is a bootstrap change: it becomes authoritative only once landed. Disabling
 an already enabled policy still needs approval under the old base. PR mode and `done --pr`
-fail explicitly when target main requires review; AgentLane does not enforce host-side merges.
+fail explicitly when target main requires review. PR submission refreshes target policy again
+after its gate to detect activation during tests. PR creation and later host merges are not
+atomic with main's policy; AgentLane does not enforce host-side merges.
 
 New tasks record versioned implementation provenance from their first claim onward. Every
 owner acquired through take, recovery or handoff remains in that list across releases,

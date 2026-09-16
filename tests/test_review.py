@@ -2,12 +2,17 @@
 import copy
 import datetime as dt
 import json
+import os
 from pathlib import Path
+import shlex
+import subprocess
+import sys
+import time
 import unittest
 from unittest.mock import patch
 
 from agentlane import board as core, mcp, review
-from tests.test_board import Fixture, sh
+from tests.test_board import BOARD, Fixture, sh
 
 
 class ReviewTests(unittest.TestCase):
@@ -284,6 +289,144 @@ class ReviewTests(unittest.TestCase):
             self.invoke_done()
         self.assertEqual(attempts, [False], "old-base push must be rejected even though main is an ancestor")
         self.assertEqual(self.remote_main(), middle)
+
+    def push_hook(self, body, hooks_path=None):
+        directory = Path(self.a, hooks_path or ".git/hooks")
+        directory.mkdir(parents=True, exist_ok=True)
+        if hooks_path:
+            self.git(self.a, "config", "core.hooksPath", hooks_path)
+        hook = directory / "pre-push"
+        with hook.open("w", encoding="utf-8", newline="\n") as f:
+            f.write("#!/bin/sh\n" + body)
+        hook.chmod(0o755)
+        return hook
+
+    def done_at_barrier(self, stage, action, extra=()):
+        """Pause the real CLI gate/hook while a different clone changes remote refs."""
+        control = Path(self.a, ".git", "push barrier")
+        control.mkdir()
+        barrier = control / "barrier.py"
+        barrier.write_text(
+            "from pathlib import Path\nimport time\n"
+            "root = Path(__file__).parent\n(root / 'entered').touch()\n"
+            "end = time.monotonic() + 30\n"
+            "while not (root / 'release').exists():\n"
+            "    if time.monotonic() > end: raise SystemExit('barrier timed out')\n"
+            "    time.sleep(.02)\n", encoding="utf-8")
+        invocation = "%s %s\n" % (shlex.quote(sys.executable.replace("\\", "/")),
+                                      shlex.quote(barrier.as_posix()))
+        if stage == "gate":
+            # This helper is called before approval: the gate is part of the reviewed SHA.
+            self.sha = self.commit(self.a, ".harness/gate/code.sh", "#!/bin/sh\n" + invocation)
+            self.git(self.a, "push", "-q", "origin", self.branch)
+            self.checkout_reviewer()
+        else:
+            self.push_hook(invocation, ".git/custom hooks with spaces")
+        if json.loads(self.git(self.a, "show", self.base + ":.harness/config.json"))["require_review"]:
+            self.approve()
+        board_before = self.git(self.fx.origin, "rev-parse", "refs/heads/board")
+        process = subprocess.Popen([sys.executable, BOARD, "--json", "done", self.task, *extra], cwd=self.a,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                   env=dict(os.environ, BOARD_MEMBER="alice", BOARD_AGENT="test"))
+        try:
+            deadline = time.monotonic() + 30
+            while not (control / "entered").exists():
+                if process.poll() is not None or time.monotonic() > deadline:
+                    self.fail("CLI did not reach " + stage + " barrier")
+                time.sleep(.02)
+            action()
+            (control / "release").touch()
+            stdout, stderr = process.communicate(timeout=45)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
+        result = subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
+        self.assertEqual(self.git(self.fx.origin, "rev-parse", "refs/heads/board"), board_before,
+                         "A rejected publication must not advance board")
+        task = self.task_state()
+        self.assertEqual(task["status"], "claimed")
+        self.assertFalse(task.get("landed"))
+        self.assertEqual(json.loads(self.git(self.fx.origin, "show", "board:claims/" + self.task + ".json"))["owner"], "alice")
+        return result
+
+    def test_exact_candidate_reaches_main_during_gate_without_completing_board(self):
+        self.candidate("src/auth/**,.harness/gate/**")
+        result = self.done_at_barrier("gate", lambda: self.git(self.b, "push", "-q", "origin", self.sha + ":refs/heads/main"))
+        self.denied(result, "nothing to land")
+        self.assertEqual(self.remote_main(), self.sha)
+
+    def test_exact_candidate_reaches_main_in_existing_pre_push_hook(self):
+        self.candidate()
+        result = self.done_at_barrier("prepush", lambda: self.git(self.b, "push", "-q", "origin", self.sha + ":refs/heads/main"))
+        self.denied(result, "nothing to land")
+        self.assertEqual(self.remote_main(), self.sha)
+
+    def test_default_policy_also_rejects_board_only_completion(self):
+        self.configure(require_review=False)
+        self.candidate("src/auth/**,.harness/gate/**")
+        result = self.done_at_barrier("gate", lambda: self.git(self.b, "push", "-q", "origin", self.sha + ":refs/heads/main"))
+        self.denied(result, "nothing to land")
+        self.assertEqual(self.remote_main(), self.sha)
+
+    def test_no_update_guard_still_runs_existing_hook(self):
+        self.candidate("src/auth/**,.harness/gate/**")
+        capture = Path(self.a, ".git", "existing hook input")
+        self.push_hook('if [ "${BOARD_LAND:-}" = 1 ]; then\n    cat > %s\nfi\n' % shlex.quote(capture.as_posix()))
+        result = self.done_at_barrier("gate", lambda: self.git(self.b, "push", "-q", "origin", self.sha + ":refs/heads/main"))
+        self.denied(result, "nothing to land")
+        records = [line.split() for line in capture.read_text().splitlines()]
+        self.assertEqual([row[2] for row in records], ["refs/heads/board"])
+        self.assertFalse(list(Path(self.a, ".git").glob("agentlane-push-*")))
+
+    def test_policy_activated_during_pr_gate_is_rechecked_before_submission(self):
+        self.configure(require_review=False)
+        self.candidate("src/auth/**,.harness/gate/**")
+        def enable_policy():
+            seed = str(Path(self.fx.tmp, "seed"))
+            cfg = json.loads(Path(seed, ".harness/config.json").read_text())
+            cfg["require_review"] = True
+            self.commit(seed, ".harness/config.json", json.dumps(cfg))
+            self.git(seed, "push", "-q", "origin", "main")
+        result = self.done_at_barrier("gate", enable_policy, ("--pr",))
+        self.denied(result, "incompatible with PR mode")
+
+    def test_existing_custom_hook_gets_original_input_and_arguments(self):
+        self.candidate()
+        self.approve()
+        for hooks_path in (".git/custom hooks with spaces", str(Path(self.a, ".git", "absolute hooks with spaces"))):
+            with self.subTest(hooks_path=hooks_path):
+                hook = self.push_hook('echo called >> "$REVIEW_HOOK_CALLS"\n'
+                                      'printf "%s\\n" "$@" > "$REVIEW_HOOK_ARGS"\n'
+                                      'git config --get core.hooksPath > "$REVIEW_HOOK_CONFIG"\n'
+                                      'git config --get review.inherited >> "$REVIEW_HOOK_CONFIG"\n'
+                                      'cat > "$REVIEW_HOOK_INPUT"\nexit 37\n', hooks_path)
+                original_bytes = hook.read_bytes()
+                env = {"REVIEW_HOOK_ARGS": str(Path(self.a, ".git/hook-args")),
+                       "REVIEW_HOOK_INPUT": str(Path(self.a, ".git/hook-input")),
+                       "REVIEW_HOOK_CALLS": str(Path(self.a, ".git/hook-calls")),
+                       "REVIEW_HOOK_CONFIG": str(Path(self.a, ".git/hook-config")),
+                       "GIT_CONFIG_PARAMETERS": "'review.inherited=from parent'"}
+                Path(env["REVIEW_HOOK_CALLS"]).write_text("")
+                result = self.fx.board("alice", "done", self.task, check=False, extra_env=env)
+                self.denied(result, "pre-push hook rejected publication (exit 37)")
+                self.assertEqual(Path(env["REVIEW_HOOK_CALLS"]).read_text().splitlines(), ["called"])
+                self.assertEqual(Path(env["REVIEW_HOOK_CONFIG"]).read_text().splitlines(), [hooks_path, "from parent"])
+                self.assertEqual(Path(env["REVIEW_HOOK_ARGS"]).read_text().splitlines(),
+                                 ["origin", self.git(self.a, "remote", "get-url", "--push", "origin")])
+                records = [line.split() for line in Path(env["REVIEW_HOOK_INPUT"]).read_text().splitlines()]
+                self.assertIn([self.sha, self.sha, "refs/heads/main", self.base], records)
+                self.assertTrue(any(row[2] == "refs/heads/board" for row in records))
+                self.assertEqual(self.remote_main(), self.base)
+                self.assertEqual(self.task_state()["status"], "claimed")
+                self.assertEqual(hook.read_bytes(), original_bytes)
+                self.assertEqual(self.git(self.a, "config", "core.hooksPath"), hooks_path)
+                self.assertFalse(list(Path(self.a, ".git").glob("agentlane-push-*")))
+        # A successful existing hook must allow the same atomic landing.
+        self.push_hook("exit 0\n", hooks_path)
+        self.done()
+        self.assertEqual(self.remote_main(), self.sha)
+        self.assertFalse(list(Path(self.a, ".git").glob("agentlane-push-*")))
 
     def test_board_contention_retries_gate_and_approval(self):
         self.candidate()

@@ -18,6 +18,7 @@ import getpass
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import random
@@ -1249,6 +1250,75 @@ def cmd_sync_reviews(args, repo):
     out(args, "updated %d reviewed task(s)" % len(changed), {"updated": changed})
 
 
+def push_with_main_guard(repo, board_branch, board_head, before, head):
+    """Require an actual main update in Git's advertised pre-push input.
+
+    Git skips force-with-lease for up-to-date refs. Without this check an atomic
+    push could publish only board after another writer has already published HEAD.
+    Preserve the effective user hook, including its interpreter, arguments, input
+    and failure status. The override and its files last for this push only.
+    """
+    original_hook = hook_path(repo)
+    # Git propagates -c options to hooks through GIT_CONFIG_PARAMETERS. Restore
+    # the incoming parameters for the user's hook and any Git commands it runs.
+    parameters = os.environ.get("GIT_CONFIG_PARAMETERS")
+    restore_parameters = ("unset GIT_CONFIG_PARAMETERS" if parameters is None else
+                          "export GIT_CONFIG_PARAMETERS=" + shlex.quote(parameters))
+    main_ref = "refs/heads/" + repo.main
+    with tempfile.TemporaryDirectory(prefix="agentlane-push-", dir=repo.git_common) as directory:
+        def quote(value):
+            return shlex.quote(value.replace("\\", "/") if os.name == "nt" else value)
+
+        hook_status = os.path.join(directory, "hook-status")
+        script = """#!/bin/sh
+input=%s
+cat > "$input" || exit 1
+original_hook=%s
+if [ -x "$original_hook" ]; then
+    (
+        %s
+        "$original_hook" "$@" < "$input"
+    )
+    status=$?
+    if [ "$status" -ne 0 ]; then
+        printf '%%s\\n' "$status" > %s
+        exit "$status"
+    fi
+fi
+found=0
+while read -r local_ref local_sha remote_ref remote_sha extra; do
+    if [ "$remote_ref" = %s ]; then
+        if [ "$local_sha" != %s ] || [ "$remote_sha" != %s ] ||
+           [ "$local_sha" = "$remote_sha" ] || [ -n "$extra" ]; then
+            echo 'AgentLane refused publication: main update does not match expected base/candidate' >&2
+            exit 1
+        fi
+        found=$((found + 1))
+    fi
+done < "$input"
+if [ "$found" -ne 1 ]; then
+    echo 'AgentLane refused publication: main is missing from push updates (possibly already at candidate); board kept' >&2
+    exit 1
+fi
+""" % (quote(os.path.join(directory, "input")), quote(original_hook), restore_parameters, quote(hook_status),
+       quote(main_ref), quote(head), quote(before))
+        path = os.path.join(directory, "pre-push")
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(script)
+        os.chmod(path, 0o755)
+        hooks_directory = directory.replace("\\", "/") if os.name == "nt" else directory
+        result = repo.git(["-c", "core.hooksPath=" + hooks_directory,
+                           "push", "--atomic", "-q", "--force-with-lease=%s:%s" % (main_ref, before), repo.remote,
+                           head + ":" + main_ref, board_head + ":refs/heads/" + board_branch],
+                          check=False, env={"BOARD_LAND": "1"})
+        if os.path.isfile(hook_status):
+            with open(hook_status, encoding="utf-8") as f:
+                status = f.read().strip()
+            raise BoardError("Existing pre-push hook rejected publication (exit %s); this push did not publish main or board.\n%s" %
+                             (status, result.stdout + result.stderr))
+        return result
+
+
 def push_main_and_board(repo, board, message, before, head=None, claim=None, claim_cfg=None):
     """Publish both prepared commits or neither; callers replay on contention."""
     board.render()
@@ -1265,9 +1335,7 @@ def push_main_and_board(repo, board, message, before, head=None, claim=None, cla
         raise BoardError("Refusing non-fast-forward main update")
     if claim is not None:
         require_live(claim, claim_cfg or repo.cfg)
-    p = repo.git(["push", "--atomic", "-q", "--force-with-lease=refs/heads/%s:%s" % (repo.main, before), repo.remote,
-                  head + ":refs/heads/" + repo.main, board_head + ":refs/heads/" + board.branch],
-                 check=False, env={"BOARD_LAND": "1"})
+    p = push_with_main_guard(repo, board.branch, board_head, before, head)
     if p.returncode == 0:
         return True
     if "does not support --atomic" in p.stderr:
@@ -1315,7 +1383,7 @@ def cmd_done(args, repo):
             raise BoardError(msg)
         paths = changed_paths(repo, before)
         if not paths:
-            raise BoardError("nothing to land: no changes relative to %s" % repo.main)
+            raise BoardError("nothing to land: no changes relative to %s. Claim kept; this command did not publish board completion." % repo.main)
         outside = paths_outside(paths, c["globs"])
         if not c.get("hot"):
             outside_hot = paths_matching(paths, repo.cfg["hot_paths"])
@@ -1338,6 +1406,11 @@ def cmd_done(args, repo):
             raise BoardError("gate failed (%s tier). Fix and run agentlane done again.\n%s" %
                              (tier, "\n".join("%s exit %d\n%s" % (r["script"], r["exit"], r["output"]) for r in results)))
         if args.pr or repo.cfg["landing_mode"] == "pr":
+            # PR creation is not an atomic main update. Refresh policy after the gate
+            # rather than submitting under a policy superseded while tests ran.
+            _, latest_cfg = fetch_target(repo)
+            if latest_cfg["require_review"]:
+                raise BoardError("require_review is incompatible with PR mode/done --pr; host merges are not enforced")
             submit_review(args, repo, board, c)
             return
         head = repo.git(["rev-parse", "HEAD"]).stdout.strip()

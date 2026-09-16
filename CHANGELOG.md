@@ -6,6 +6,9 @@
 - Structured CLI/MCP approvals and withdrawals tied to commit, main base and live lease, with
   durable implementation provenance and explicit incompatibility with PR mode.
 - Exact expected-main guard on atomic publication, with a separate fast-forward ancestry proof.
+- Guard Git's advertised pre-push input so an up-to-date main cannot publish board completion
+  under a stale base. Chain existing custom hooks and honor their rejection.
+- Refresh review policy after the gate before PR submission, detecting activation during tests.
 
 ## 0.1.0 — prepared, unreleased
 

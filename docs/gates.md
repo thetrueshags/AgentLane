@@ -46,3 +46,9 @@ The engineer runs `done TASK`. The normal gate, path checks and live claim check
 Approval must match the resulting post-rebase/gated HEAD, main base and lease. A changed commit,
 moving base, withdrawal, handoff or recovered lease requires review again. See the
 [worked example](example.md#optional-independent-review) and [protocol details](architecture.md#opt-in-independent-review).
+
+At publication, a temporary pre-push guard requires an actual main update from the reviewed base
+to the candidate; an already up-to-date main cannot let board completion publish on its own.
+The existing effective pre-push hook still receives its original input and arguments, and its
+rejection is honored. If another writer has already published the exact candidate, `done` fails
+with `nothing to land` and retains the claim for inspection instead of recording a stale landing.
