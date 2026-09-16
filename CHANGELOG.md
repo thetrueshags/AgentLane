@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Optional provider-neutral foreground worker supervision in separate local clones, with
+  atomic local receipts, separate logs, stdin files, timeout/interruption cleanup, common Git
+  directory exclusion, conservative orphan recovery, and read-only MCP worker list/show.
+- Contain Windows workers in kill-on-close jobs before their initial thread resumes, stop
+  ordinary descendants after parent exit, isolate child Git/AgentLane context from the
+  coordinator, and report malformed local receipts as actionable CLI errors.
+
 ## 0.1.0 — prepared, unreleased
 
 - Installable CLI, Python module entry point and shared version metadata; no runtime dependencies.

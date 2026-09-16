@@ -13,6 +13,10 @@ from agentlane import __version__
 ROOT = os.environ.get("BOARD_REPO_ROOT") or os.getcwd()
 
 TOOLS = [
+    {"name": "board_worker_list", "description": "Read-only local worker runs in this coordinator. Process exit is not task completion.",
+     "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "board_worker_show", "description": "Read-only local worker receipt and log paths; no launch or task mutation.",
+     "inputSchema": {"type": "object", "required": ["run_id"], "properties": {"run_id": {"type": "string"}}}},
     {"name": "board_doctor", "description": "Read-only setup diagnostics with fixes for missing prerequisites.",
      "inputSchema": {"type": "object", "properties": {}}},
     {"name": "board_list", "description": "List tasks, paths, owners and stale claims; filter available work or this worker's tasks.",
@@ -98,6 +102,10 @@ def call(name, a):
             if rule and (not isinstance(value, types[rule["type"]]) or
                          (rule["type"] == "array" and any(not isinstance(item, str) for item in value))):
                 return json.dumps({"ok": False, "error": "Invalid argument: " + key}), True
+    if name == "board_worker_list":
+        return board(["worker", "list"])
+    if name == "board_worker_show":
+        return board(["worker", "show", "--", a["run_id"]])
     if name == "board_doctor":
         return board(["doctor"])
     if name == "board_show":
