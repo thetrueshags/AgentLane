@@ -62,7 +62,7 @@ TOOLS = [
      "description": "Flag that this member is blocked on their current task and say why. Keeps the claim.",
      "inputSchema": {"type": "object", "required": ["text"], "properties": {"text": {"type": "string"}, "task_id": {"type": "string"}}}},
     {"name": "board_done",
-     "description": "Land the current claim: rebase on main, run the quality gate, push to main, release the claim. "
+     "description": "Land the current claim: rebase only if current main is not already an ancestor, run the quality gate, push to main, release the claim. Preserve an already-current candidate's exact SHA. "
                     "Commit all work first. Runs the gate before either direct landing or PR submission. Target main require_review needs independent approval of exact commit/base/lease and rejects PR mode. Otherwise honors landing_mode=pr or pr=true. A PR submission is not a completed task.",
      "inputSchema": {"type": "object", "properties": {"task_id": {"type": "string"}, "pr": {"type": "boolean"}}}},
     {"name": "board_approve",
