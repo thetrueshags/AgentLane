@@ -19,12 +19,17 @@ without embedding the prompt in a command. Its path is relative to the invoking 
 Without it, stdin is EOF. stdout and stderr go to separate local files, not the terminal;
 another terminal can inspect `worker list`, `worker show`, and the log paths while a run lives.
 
-Use foreground commands that own and wait for their children. This is not a daemon launcher.
+Use foreground commands. Remaining ordinary descendants are stopped when the command exits;
+this is not a daemon launcher.
 No provider settings, model, permission flags, authentication, prompt or resume arguments are
 added. Supply any exact provider session resume arguments yourself. The environment is inherited
-except for the internal `AGENTLANE_LOCK_HELD` bypass, which is removed. Do not launch from a shell
-with Git routing overrides such as `GIT_DIR`/`GIT_WORK_TREE`: although clone identity discovery
-ignores these overrides, child commands inherit your environment.
+except for coordinator context: `AGENTLANE_LOCK_HELD`, `BOARD_LAND`, `BOARD_SCAFFOLD`, `BOARD_MEMBER`,
+`BOARD_AGENT`, `BOARD_REPO_ROOT` and `BOARD_PATHS` are removed. Repository-local Git variables
+(including `GIT_DIR`, `GIT_COMMON_DIR`, `GIT_WORK_TREE`, index/object/quarantine paths and inline
+Git configuration overrides) are removed for both discovery and execution. Child Git commands
+resolve the target clone, and child AgentLane commands use that clone's configured identity.
+Unrelated model, permission and authentication settings, including user-wide Git configuration
+and SSH credentials, are preserved.
 
 `--name` labels this run; it does not register a member or change the target's identity.
 `--task` is **unverified metadata**, even if it happens to name a real task. Supervision never
@@ -42,22 +47,28 @@ on POSIX. Windows uses flushed files and atomic replacement, without directory f
 
 Receipts include worker name, canonical clone/common Git directory, unverified task, literal argv,
 UTC start/finish times, supervisor/child PIDs, observed child exit code, timeout, status and log
-paths. They do not snapshot environment variables, credentials or prompt contents. **Arguments
+paths. `cleanup_confirmed` means the supervisor observed cleanup of its job/process group and
+reaped any spawned direct child; it does not certify task results or external services. New receipts
+identify `containment` as `windows-job` or `posix-process-group` once launch containment succeeds.
+They do not snapshot environment variables, credentials or prompt contents. **Arguments
 and worker logs can themselves contain secrets**: use files or the worker's own authentication
 mechanism for secrets rather than command-line arguments, and protect local Git metadata.
 
 | Status | Meaning |
 | --- | --- |
 | `running` | The run's marker and active supervisor lock are present. |
-| `exited` | The supervised command exited with zero. This does not mean its task is complete. |
+| `exited` | The supervised command exited with zero and remaining ordinary descendants were stopped. This does not mean its task is complete. |
 | `failed` | Nonzero process exit or launch failure, including a missing executable. |
 | `interrupted` | Timeout or foreground interruption stopped/reaped the command. `reason` distinguishes them. |
 | `unknown` | The supervisor disappeared without an exit receipt, or tree cleanup could not be confirmed. |
 
-A launch failure has no child PID or exit code. Unknown runs retain the last observed evidence;
+A failure before process creation has no child PID or exit code. Containment failures can
+include the stopped child's PID and exit code. Unknown runs retain the last observed evidence;
 read-only list/show do not invent an exit code or finish time. CLI exit codes are the child's
 nonnegative exit code (1 for signal exits/launch errors), 124 for timeout, 130 for interruption,
 and 1 when cleanup is uncertain. `--json` works before `worker`, or on its subcommands before `--`.
+Malformed local receipts produce a CLI error identifying the file; inspect or restore that
+receipt without deleting the target's unresolved marker.
 
 ## Duplicate protection and recovery
 
@@ -70,7 +81,9 @@ Before spawning, the supervisor durably writes `<target-common-git-dir>/agentlan
 which identifies the run and its coordinator receipt. A successful observed exit/cleanup clears
 it. A hard-killed supervisor releases its OS lock, but **does not clear this marker**. Relaunch is
 refused regardless of whether a recorded PID exists: a PID can be reused and descendants can live
-after their parent dies. Do not delete marker or lock files to bypass this protection.
+after their parent dies. On Windows, job containment normally terminates children on supervisor
+death too, but without the supervisor's final observation the receipt stays unknown and the
+marker remains. Do not delete marker or lock files to bypass this protection.
 
 To recover an orphan, inspect the marker and receipt in the original coordinator. Using OS
 process inspection, verify the command's identity/start time and all descendants, stop any
@@ -92,15 +105,23 @@ The acknowledgement is an operator assertion, not a PID-based automatic reconcil
 Keep the CLI in the foreground. Ctrl-C (and POSIX termination signals/Windows Ctrl-Break when
 delivered to the supervisor) triggers cleanup and preserves logs and an exit receipt. A timeout
 does the same. POSIX workers start in a new session; cleanup kills the process group and reaps
-the direct child. Windows workers use `CREATE_NO_WINDOW`; cleanup uses `taskkill /T /F` while the
-parent exists, then reaps it. Repeated interruption requests do not interrupt cleanup.
+the direct child. Windows workers use `CREATE_NO_WINDOW | CREATE_SUSPENDED`. Before the initial
+thread resumes, the supervisor assigns the child to an anonymous, non-inheritable Windows job
+with kill-on-close enabled and no breakaway permission. Failure to establish containment stops
+the suspended child; execution never falls back to an uncontained launch. Cleanup terminates
+the job and waits for active processes to drain, then waits for the direct child's process
+handle to signal. This covers ordinary descendants even after the parent exits. The job handle
+is closed on every exit path; supervisor death also closes it at the OS level. See Microsoft's
+[job object documentation](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects).
+Repeated interruption requests do not interrupt cleanup.
 
 These mechanisms are not an OS sandbox. POSIX descendants that deliberately create another
-session can escape the group. Windows `taskkill /T` cannot reliably recover descendants whose
-parent already exited, so commands must not detach/background work, including on successful
-exit. If tree termination fails, the marker stays and status becomes unknown. A supervisor
-hard kill, OS crash or power loss can leave children or incomplete evidence; use the manual
-recovery procedure. Network filesystems must support OS locks and atomic replacement; use
+session can escape the group. Work delegated to external services outside the process group or
+Windows job is not supervised. If tree termination cannot be confirmed, the marker stays and
+status becomes unknown. A supervisor hard kill before Windows job assignment can leave a
+suspended child; a hard kill after assignment still leaves an unobserved exit. OS crashes or
+power loss can also leave incomplete evidence. Use the manual recovery procedure in these cases.
+Network filesystems must support OS locks and atomic replacement; use
 local Git metadata for this local facility.
 
 ## MCP

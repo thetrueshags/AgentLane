@@ -1,4 +1,5 @@
 """Foreground worker lifecycle tests with real processes and local Git repositories."""
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -11,6 +12,36 @@ import unittest
 
 from tests.test_board import BOARD, ROOT, Fixture, sh
 from tests.test_mcp_and_ci import mcp_session
+
+
+@contextlib.contextmanager
+def windows_processes(pids):
+    """Hold process identities, await termination, and clean up even on a test failure."""
+    import ctypes as ct
+    from ctypes import wintypes as wt
+    api = ct.WinDLL("kernel32", use_last_error=True)
+    for name, result, arguments in [
+        ("OpenProcess", wt.HANDLE, [wt.DWORD, wt.BOOL, wt.DWORD]),
+        ("WaitForSingleObject", wt.DWORD, [wt.HANDLE, wt.DWORD]),
+        ("TerminateProcess", wt.BOOL, [wt.HANDLE, wt.UINT]),
+        ("CloseHandle", wt.BOOL, [wt.HANDLE]),
+    ]:
+        function = getattr(api, name)
+        function.restype, function.argtypes = result, arguments
+    handles = []
+    try:
+        for pid in pids:
+            handle = api.OpenProcess(0x00100001, False, pid)  # SYNCHRONIZE | TERMINATE
+            if not handle:
+                raise ct.WinError(ct.get_last_error())
+            handles.append(handle)
+        yield lambda: all(api.WaitForSingleObject(handle, 5000) == 0 for handle in handles)
+    finally:
+        for handle in handles:
+            if api.WaitForSingleObject(handle, 0) == 258:
+                api.TerminateProcess(handle, 1)
+                api.WaitForSingleObject(handle, 5000)
+            api.CloseHandle(handle)
 
 
 class WorkerTests(unittest.TestCase):
@@ -121,6 +152,63 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(len(json.loads(self.cli("list").stdout)), 2)
         self.assertEqual(self.run_worker().returncode, 0)
 
+    def test_child_environment_drops_coordinator_routing_bypasses_and_identity(self):
+        removed = {"AGENTLANE_LOCK_HELD", "BOARD_LAND", "BOARD_SCAFFOLD", "BOARD_MEMBER", "BOARD_AGENT",
+                   "BOARD_REPO_ROOT", "BOARD_PATHS", "GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE",
+                   "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+                   "GIT_QUARANTINE_PATH", "GIT_PREFIX", "GIT_SHALLOW_FILE", "GIT_CONFIG",
+                   "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"}
+        self.env.update({key: "coordinator-context" for key in removed})
+        self.env.update(GIT_DIR=str(self.coordinator / ".git"), GIT_COMMON_DIR=str(self.coordinator / ".git"),
+                        GIT_WORK_TREE=str(self.coordinator), GIT_INDEX_FILE=str(self.coordinator / ".git/index"),
+                        GIT_OBJECT_DIRECTORY=str(self.coordinator / ".git/objects"),
+                        GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="core.worktree", GIT_CONFIG_VALUE_0=str(self.coordinator),
+                        BOARD_LAND="1", BOARD_SCAFFOLD="1", BOARD_MEMBER="coordinator", BOARD_AGENT="coordinator")
+        config = self.base / "user.gitconfig"
+        config.write_text("")
+        preserved = {"WORKER_MODEL": "user-model", "WORKER_PERMISSIONS": "user-permissions",
+                     "SSH_AUTH_SOCK": "test-auth-socket", "GIT_CONFIG_GLOBAL": str(config)}
+        self.env.update(preserved)
+        code = ("import json,os,subprocess; "
+                "print(json.dumps({'env':{k:os.environ.get(k) for k in %r}, "
+                "'root':subprocess.check_output(['git','rev-parse','--show-toplevel'],text=True).strip(), "
+                "'common':subprocess.check_output(['git','rev-parse','--git-common-dir'],text=True).strip()}))"
+                % sorted(removed | set(preserved)))
+        result = self.run_worker(code)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        receipt = json.loads(result.stdout)
+        output = json.loads(Path(receipt["stdout_log"]).read_text())
+        self.assertEqual(Path(output["root"]), self.clone.resolve())
+        self.assertEqual((self.clone / output["common"]).resolve(), self.clone / ".git")
+        for key in removed:
+            self.assertIsNone(output["env"][key], key)
+        for key, value in preserved.items():
+            self.assertEqual(output["env"][key], value)
+
+    def test_corrupt_receipts_fail_usefully_in_list_and_show(self):
+        receipt = json.loads(self.run_worker().stdout)
+        path = Path(receipt["stdout_log"]).with_name("receipt.json")
+        invalid = [[], None, "text", {}, {"status": "running"}]
+        for key, value in (("git_common_dir", []), ("status", {}), ("command", [None]),
+                           ("name", 42), ("child_pid", True), ("run_id", "wrong-run")):
+            invalid.append(dict(receipt, **{key: value}))
+        try:
+            for value in invalid:
+                with self.subTest(value=value):
+                    path.write_text(json.dumps(value))
+                    for args in (("list",), ("show", receipt["run_id"])):
+                        result = self.cli(*args)
+                        self.assertEqual(result.returncode, 1)
+                        self.assertIn("Invalid local worker", json.loads(result.stdout)["error"])
+                        self.assertIn("receipt.json", json.loads(result.stdout)["error"])
+                        self.assertNotIn("Traceback", result.stderr)
+            path.write_text("{broken JSON")
+            result = self.cli("show", receipt["run_id"])
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("Invalid local worker JSON", json.loads(result.stdout)["error"])
+        finally:
+            path.write_text(json.dumps(receipt))
+
     def test_refuses_self_worktree_invalid_inputs_and_reads_are_read_only(self):
         self.assertEqual(json.loads(self.cli("list").stdout), [])
         self.assertFalse((self.coordinator / ".git/agentlane-workers").exists())
@@ -168,13 +256,17 @@ class WorkerTests(unittest.TestCase):
             stdout, stderr = process.communicate(timeout=15)
             self.assertEqual(json.loads(stdout)["status"], "interrupted", stderr)
 
-    def tree_code(self):
+    def tree_code(self, exit_parent=False):
         # A descendant continually changes a file so cleanup can be proved without trusting a PID.
         pulse = self.base / "pulse"
         grandchild = ("import time; from pathlib import Path; p=Path(%r); "
                       "exec('while True:\\n p.write_text(str(time.time_ns()))\\n time.sleep(.05)')" % str(pulse))
-        code = ("import subprocess,sys,time; subprocess.Popen([sys.executable,'-c',%r]); "
-                "print('tree ready',flush=True); time.sleep(60)" % grandchild)
+        code = ("import subprocess,sys,time; from pathlib import Path; "
+                "p=subprocess.Popen([sys.executable,'-c',%r]); "
+                "Path(%r).write_text(str(p.pid)); print('tree ready',flush=True); "
+                % (grandchild, str(self.base / "descendant.pid")))
+        code += ("exec(%r)" % ("while not Path(%r).exists():\n time.sleep(.02)" % str(self.base / "exit-parent"))
+                 if exit_parent else "time.sleep(60)")
         return pulse, code
 
     def assert_stopped(self, pulse):
@@ -195,6 +287,114 @@ class WorkerTests(unittest.TestCase):
         self.assertIsNotNone(receipt["exit_code"])
         self.assert_stopped(pulse)
         self.assertEqual(self.run_worker().returncode, 0)
+
+    def test_parent_exit_stops_ordinary_descendant_before_releasing_clone(self):
+        pulse, code = self.tree_code(exit_parent=True)
+        process = self.start(code=code)
+        self.wait_for(pulse.exists)
+        descendant = int((self.base / "descendant.pid").read_text())
+        guard = windows_processes([descendant]) if os.name == "nt" else contextlib.nullcontext(None)
+        with guard as stopped:
+            (self.base / "exit-parent").touch()
+            stdout, stderr = process.communicate(timeout=20)
+            receipt = json.loads(stdout)
+            self.assertEqual(process.returncode, 0, stderr)
+            self.assertEqual(receipt["status"], "exited")
+            self.assertTrue(receipt["cleanup_confirmed"])
+            if stopped is not None:
+                self.assertTrue(stopped(), "descendant process handle did not become signaled")
+            self.assert_stopped(pulse)
+            self.assertFalse((self.clone / ".git/agentlane-worker.json").exists())
+        self.assertEqual(self.run_worker().returncode, 0)
+
+    @unittest.skipUnless(os.name == "nt", "Windows job lifetime")
+    def test_windows_supervisor_death_kills_child_and_descendant_but_keeps_marker(self):
+        pulse, code = self.tree_code()
+        process = self.start(code=code)
+        receipt = self.running()[0]
+        self.wait_for(pulse.exists)
+        descendant = int((self.base / "descendant.pid").read_text())
+        with windows_processes([receipt["child_pid"], descendant]) as stopped:
+            process.kill()
+            process.communicate(timeout=15)
+            self.assertTrue(stopped(), "supervisor death left a job process alive")
+            self.assert_stopped(pulse)
+        shown = json.loads(self.cli("show", receipt["run_id"]).stdout)
+        self.assertEqual(shown["status"], "unknown")
+        self.assertIsNone(shown["exit_code"])
+        self.assertTrue((self.clone / ".git/agentlane-worker.json").exists())
+        self.assertEqual(self.run_worker().returncode, 1)
+        self.assertEqual(self.cli("resolve", receipt["run_id"], "--acknowledge-stopped").returncode, 0)
+
+    @unittest.skipUnless(os.name == "nt", "Windows job containment failure")
+    def test_windows_containment_failure_never_runs_uncontained_child(self):
+        ran = self.base / "must-not-run"
+        for failure in ("assignment", "resume"):
+            with self.subTest(failure=failure):
+                wrapper = self.base / "fail-containment.py"
+                patch = ("original = WindowsJob.__init__\n"
+                         "def initialize(self):\n original(self)\n"
+                         " self.api.AssignProcessToJobObject = lambda *args: 0\n"
+                         "WindowsJob.__init__ = initialize\n" if failure == "assignment" else
+                         "def refuse(self,pid):\n raise OSError('injected resume failure')\n"
+                         "WindowsJob._resume = refuse\n")
+                wrapper.write_text("import runpy\nfrom agentlane.windows_job import WindowsJob\n" + patch +
+                                   "runpy.run_path(%r,run_name='__main__')\n" % BOARD)
+                process = self.start(code="from pathlib import Path; Path(%r).touch()" % str(ran),
+                                     prefix=[sys.executable, str(wrapper)])
+                stdout, stderr = process.communicate(timeout=20)
+                receipt = json.loads(stdout)
+                self.assertEqual(process.returncode, 1, stderr)
+                self.assertEqual(receipt["status"], "failed")
+                self.assertIsNotNone(receipt["child_pid"])
+                self.assertIsNotNone(receipt["exit_code"])
+                self.assertTrue(receipt["cleanup_confirmed"])
+                self.assertFalse(ran.exists())
+                self.assertEqual(self.run_worker().returncode, 0)
+
+    @unittest.skipUnless(os.name == "nt", "Windows job error cleanup")
+    def test_windows_supervisor_error_after_resume_drains_entire_job(self):
+        pulse, code = self.tree_code()
+        trigger = self.base / "fail-supervisor"
+        wrapper = self.base / "fail-after-resume.py"
+        wrapper.write_text("import runpy,time\nfrom pathlib import Path\n"
+                           "from agentlane.windows_job import WindowsJob\n"
+                           "original = WindowsJob.contain\n"
+                           "def contain(self,child):\n original(self,child)\n"
+                           " while not Path(%r).exists():\n  time.sleep(.02)\n"
+                           " raise OSError('injected supervisor failure after resume')\n"
+                           "WindowsJob.contain = contain\nrunpy.run_path(%r,run_name='__main__')\n"
+                           % (str(trigger), BOARD))
+        process = self.start(code=code, prefix=[sys.executable, str(wrapper)])
+        receipt = self.running()[0]
+        self.wait_for(pulse.exists)
+        descendant = int((self.base / "descendant.pid").read_text())
+        with windows_processes([receipt["child_pid"], descendant]) as stopped:
+            trigger.touch()
+            stdout, stderr = process.communicate(timeout=20)
+            receipt = json.loads(stdout)
+            self.assertEqual(process.returncode, 1, stderr)
+            self.assertEqual(receipt["status"], "failed")
+            self.assertTrue(receipt["cleanup_confirmed"])
+            self.assertTrue(stopped())
+        self.assert_stopped(pulse)
+        self.assertEqual(self.run_worker().returncode, 0)
+
+    @unittest.skipUnless(os.name == "nt", "Windows job cleanup uncertainty")
+    def test_unconfirmed_job_cleanup_keeps_unknown_receipt_and_clone_marker(self):
+        wrapper = self.base / "unconfirmed-cleanup.py"
+        wrapper.write_text("import runpy\nfrom agentlane.windows_job import WindowsJob\n"
+                           "original = WindowsJob.stop\n"
+                           "def stop(self):\n original(self)\n return False\n"
+                           "WindowsJob.stop = stop\nrunpy.run_path(%r,run_name='__main__')\n" % BOARD)
+        process = self.start(code="pass", prefix=[sys.executable, str(wrapper)])
+        stdout, stderr = process.communicate(timeout=20)
+        receipt = json.loads(stdout)
+        self.assertEqual(process.returncode, 1, stderr)
+        self.assertEqual(receipt["status"], "unknown")
+        self.assertFalse(receipt["cleanup_confirmed"])
+        self.assertEqual(self.run_worker().returncode, 1)
+        self.assertEqual(self.cli("resolve", receipt["run_id"], "--acknowledge-stopped").returncode, 0)
 
     def test_foreground_interruption_retains_logs_and_stops_tree(self):
         pulse, code = self.tree_code()
@@ -278,10 +478,13 @@ class WorkerBoardCompatibilityTests(unittest.TestCase):
             result = sh([sys.executable, BOARD, "--json", "worker", "run", "--clone", clone,
                          "--name", "worker", "--task", task["id"], "--timeout", "10", "--",
                          sys.executable, "-m", "agentlane", "--json", "whoami"], coordinator,
-                        env={"PYTHONPATH": ROOT, "AGENTLANE_LOCK_HELD": "must be stripped"})
+                        env={"PYTHONPATH": ROOT, "AGENTLANE_LOCK_HELD": "must be stripped",
+                             "BOARD_MEMBER": "coordinator", "BOARD_AGENT": "coordinator-agent",
+                             "BOARD_LAND": "1", "BOARD_SCAFFOLD": "1"})
             receipt = json.loads(result.stdout)
             self.assertEqual(receipt["status"], "exited")
             self.assertEqual(json.loads(Path(receipt["stdout_log"]).read_text())["member"], "worker")
+            self.assertEqual(json.loads(Path(receipt["stdout_log"]).read_text())["agent"], "test")
             self.assertEqual(sh(["git", "rev-parse", "refs/heads/board"], fx.origin).stdout, before)
             self.assertEqual(fx.data(fx.board("worker", "show", task["id"]))["status"], "open")
         finally:

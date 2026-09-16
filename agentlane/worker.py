@@ -17,6 +17,25 @@ import uuid
 from agentlane.board import BoardError
 
 
+# Repository-local Git context (including hook/quarantine context), not user-wide
+# authentication/configuration such as SSH_AUTH_SOCK or GIT_CONFIG_GLOBAL.
+GIT_LOCAL_ENV = {
+    "GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_QUARANTINE_PATH",
+    "GIT_SHALLOW_FILE", "GIT_GRAFT_FILE", "GIT_REPLACE_REF_BASE", "GIT_NO_REPLACE_OBJECTS",
+    "GIT_PREFIX", "GIT_INTERNAL_SUPER_PREFIX", "GIT_CEILING_DIRECTORIES", "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+    "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT",
+}
+WORKER_CONTEXT_ENV = {"AGENTLANE_LOCK_HELD", "BOARD_LAND", "BOARD_SCAFFOLD", "BOARD_MEMBER",
+                      "BOARD_AGENT", "BOARD_REPO_ROOT", "BOARD_PATHS"}
+
+
+def worker_environment():
+    return {key: value for key, value in os.environ.items()
+            if key.upper() not in GIT_LOCAL_ENV | WORKER_CONTEXT_ENV
+            and not key.upper().startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))}
+
+
 class LockBusy(OSError):
     """Only a conflicting OS lock, not a missing/inaccessible lock file."""
 
@@ -48,9 +67,7 @@ def timestamp():
 
 def git_paths(cwd):
     # Git routing inherited from hooks must not redirect clone identity checks.
-    env = dict(os.environ)
-    for key in ("GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
-        env.pop(key, None)
+    env = worker_environment()
 
     def query(option):
         result = subprocess.run(["git", "rev-parse", option], cwd=cwd, env=env,
@@ -96,8 +113,46 @@ def atomic_json(path, data):
 
 
 def read_json(path):
-    with path.open(encoding="utf-8") as stream:
-        return json.load(stream)
+    try:
+        with path.open(encoding="utf-8") as stream:
+            data = json.load(stream)
+        if not isinstance(data, dict):
+            raise ValueError("expected a JSON object")
+        return data
+    except (ValueError, UnicodeError) as error:
+        raise BoardError("Invalid local worker JSON at %s: %s. Inspect/restore this file; "
+                         "do not remove an unresolved clone marker." % (path, error)) from error
+
+
+def read_receipt(path):
+    data = read_json(path)
+    strings = ("run_id", "name", "clone", "git_common_dir", "started", "status", "stdout_log", "stderr_log")
+    valid = all(isinstance(data.get(key), str) and data[key] for key in strings)
+    valid = valid and data["run_id"] == path.parent.name and bool(re.fullmatch(r"[0-9a-f]{32}", data["run_id"]))
+    valid = valid and data["status"] in ("running", "exited", "failed", "interrupted", "unknown")
+    valid = valid and isinstance(data.get("command"), list) and bool(data["command"]) and all(
+        isinstance(arg, str) for arg in data["command"])
+    valid = valid and all(key in data and (data[key] is None or isinstance(data[key], str))
+                          for key in ("task", "finished")) and data.get("task_verified") is False
+    valid = valid and type(data.get("supervisor_pid")) is int and data["supervisor_pid"] > 0
+    valid = valid and all(key in data and (data[key] is None or type(data[key]) is int)
+                          for key in ("child_pid", "exit_code"))
+    valid = valid and (data["child_pid"] is None or data["child_pid"] > 0)
+    valid = valid and all(Path(data[key]).is_absolute() for key in ("clone", "git_common_dir", "stdout_log", "stderr_log"))
+    if "cleanup_confirmed" in data:
+        valid = valid and type(data["cleanup_confirmed"]) is bool
+    if not valid:
+        raise BoardError("Invalid local worker receipt at %s: missing or malformed fields. "
+                         "Inspect/restore the receipt; do not remove an unresolved clone marker." % path)
+    return data
+
+
+def read_marker(path):
+    data = read_json(path)
+    if (not isinstance(data.get("run_id"), str) or not re.fullmatch(r"[0-9a-f]{32}", data["run_id"])
+            or not isinstance(data.get("receipt"), str) or not Path(data["receipt"]).is_absolute()):
+        raise BoardError("Invalid local worker marker at %s: expected run_id and absolute receipt path." % path)
+    return data
 
 
 @contextlib.contextmanager
@@ -148,23 +203,23 @@ def receipt_path(registry, run_id):
 
 
 def status(path):
-    receipt = read_json(path)
+    receipt = read_receipt(path)
     if receipt["status"] != "running":
         return receipt
     common = Path(receipt["git_common_dir"])
     try:
         with clone_lock(common):
             # Re-read under the lock: the supervisor may just have finished.
-            receipt = read_json(path)
+            receipt = read_receipt(path)
             if receipt["status"] == "running":
                 receipt["status"] = "unknown"
     except LockBusy:
         # A lock alone does not identify a run. Require its durable marker too.
         try:
-            marker = read_json(common / "agentlane-worker.json")
+            marker = read_marker(common / "agentlane-worker.json")
             if marker["run_id"] != receipt["run_id"]:
                 receipt["status"] = "unknown"
-        except (OSError, ValueError, KeyError):
+        except OSError:
             receipt["status"] = "unknown"
     except OSError:
         receipt["status"] = "unknown"
@@ -191,19 +246,15 @@ def interruption():
             signal.signal(number, handler)
 
 
-def stop_tree(child):
+def stop_tree(child, job=None):
     """Stop the process group/tree before reaping its leader. Return cleanup evidence."""
     if os.name == "nt":
-        # CREATE_NO_WINDOW children cannot reliably receive console control events.
-        # taskkill /T enumerates descendants while the parent still exists.
         try:
-            result = subprocess.run(["taskkill", "/PID", str(child.pid), "/T", "/F"],
-                                    capture_output=True, timeout=15,
-                                    creationflags=subprocess.CREATE_NO_WINDOW)
-            stopped = result.returncode == 0
-        except (OSError, subprocess.TimeoutExpired):
+            stopped = job.stop() if job is not None else False
+        except OSError:
             stopped = False
-        if child.poll() is None:
+        # Also covers failure to assign the suspended child to its job.
+        if child.poll() is None and (job is None or not job.assigned or not stopped):
             try:
                 child.kill()
             except OSError:
@@ -222,6 +273,7 @@ def stop_tree(child):
                 except OSError:
                     pass
     try:
+        # Job accounting can reach zero just before the process handle is signaled.
         child.wait(timeout=15)
     except subprocess.TimeoutExpired:
         return False
@@ -258,25 +310,30 @@ def run_worker(args, registry, coordinator_common):
                    "status": "running", "stdout_log": str(directory / "stdout.log"),
                    "stderr_log": str(directory / "stderr.log"), "timeout": args.timeout}
         child = None
+        job = None
         clear_marker = False
         exit_status = 1
         with interruption() as signals:
             atomic_json(path, receipt)
             atomic_json(marker_path, {"run_id": run_id, "receipt": str(path)})
             try:
-                env = dict(os.environ)
-                env.pop("AGENTLANE_LOCK_HELD", None)
-                options = ({"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt"
-                           else {"start_new_session": True})
+                if os.name == "nt":
+                    from agentlane.windows_job import WindowsJob
+                    job = WindowsJob()
+                options = {"creationflags": job.creationflags} if job else {"start_new_session": True}
+                env = worker_environment()
                 child = subprocess.Popen(command, shell=False, cwd=clone, env=env, stdin=stdin,
                                          stdout=stdout, stderr=stderr, close_fds=True, **options)
                 receipt["child_pid"] = child.pid
+                atomic_json(path, receipt)
+                if job is not None:
+                    job.contain(child)
+                receipt["containment"] = "windows-job" if job else "posix-process-group"
                 atomic_json(path, receipt)
                 deadline = time.monotonic() + args.timeout if args.timeout else None
                 while True:
                     reason = "signal" if signals else "timeout" if deadline and time.monotonic() >= deadline else None
                     if reason:
-                        clear_marker = stop_tree(child)
                         receipt.update(status="interrupted", reason=reason)
                         exit_status = 124 if reason == "timeout" else 130
                         break
@@ -284,8 +341,6 @@ def run_worker(args, registry, coordinator_common):
                         code = child.wait(timeout=0.1)
                         receipt["status"] = "exited" if code == 0 else "failed"
                         exit_status = code if code >= 0 else 1
-                        # Also stop descendants left in the POSIX foreground group.
-                        clear_marker = True if os.name == "nt" else stop_tree(child)
                         break
                     except subprocess.TimeoutExpired:
                         pass
@@ -293,16 +348,25 @@ def run_worker(args, registry, coordinator_common):
                 receipt.update(status="interrupted" if isinstance(error, KeyboardInterrupt) else "failed",
                                error=str(error))
                 exit_status = 130 if isinstance(error, KeyboardInterrupt) else 1
-                clear_marker = stop_tree(child) if child is not None else True
             finally:
-                # Any unexpected supervisor error still attempts cleanup and retains the marker.
-                if child is not None and child.poll() is None:
-                    stop_tree(child)
+                # Always drain the job/group, including descendants of an exited parent.
+                # Close the job even if another cleanup step unexpectedly raises.
+                try:
+                    clear_marker = stop_tree(child, job) if child is not None else True
+                finally:
+                    if job is not None:
+                        try:
+                            job.close()
+                        except OSError as error:
+                            clear_marker = False
+                            receipt["error"] = "Could not close Windows worker job: %s" % error
                 receipt["exit_code"] = child.returncode if child is not None else None
                 receipt["finished"] = timestamp()
                 receipt["cleanup_confirmed"] = clear_marker
-                if not clear_marker:
+                if not clear_marker or receipt["status"] == "running":
                     receipt["status"] = "unknown"
+                    clear_marker = False
+                    receipt["cleanup_confirmed"] = False
                 for stream in (stdout, stderr):
                     stream.flush()
                     os.fsync(stream.fileno())
@@ -319,14 +383,14 @@ def resolve(args, registry):
         raise BoardError("Verify the worker and ALL descendants have stopped, then pass --acknowledge-stopped. "
                          "A missing or reused PID is not proof. See docs/workers.md.")
     path = receipt_path(registry, args.run_id)
-    receipt = read_json(path)
+    receipt = read_receipt(path)
     common = Path(receipt["git_common_dir"])
     with exclusive_clone(common):
         marker_path = common / "agentlane-worker.json"
-        marker = read_json(marker_path)
+        marker = read_marker(marker_path)
         if marker.get("run_id") != args.run_id or Path(marker["receipt"]).resolve() != path.resolve():
             raise BoardError("Clone marker belongs to a different run/coordinator; refusing resolution.")
-        receipt = read_json(path)
+        receipt = read_receipt(path)
         if receipt["status"] == "running":
             receipt["status"] = "unknown"
         receipt["resolution"] = {"acknowledged_stopped": timestamp(), "operator_pid": os.getpid()}
