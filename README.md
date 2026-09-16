@@ -34,6 +34,13 @@ that selects your intended interpreter.
 
 ## Your first lane
 
+For optional foreground supervision in separate local clones, use
+`agentlane worker run --clone ../worker --name engineer -- <command> <args...>`.
+Local receipts and separate logs are available through `agentlane worker list`/`show` and
+read-only MCP tools. This also works in ordinary Git source checkouts without a board.
+Process exit never marks a task complete. See [local workers](docs/workers.md) for stdin files,
+timeouts, duplicate protection and orphan recovery.
+
 In a project whose shared board is initialized:
 
 ```sh

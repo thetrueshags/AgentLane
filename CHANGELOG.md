@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Optional provider-neutral foreground worker supervision in separate local clones, with
+  atomic local receipts, separate logs, stdin files, timeout/interruption cleanup, common Git
+  directory exclusion, conservative orphan recovery, and read-only MCP worker list/show.
+
 ## 0.1.0 — prepared, unreleased
 
 - Installable CLI, Python module entry point and shared version metadata; no runtime dependencies.

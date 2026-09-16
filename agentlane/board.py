@@ -1572,6 +1572,8 @@ def build_parser():
     p.add_argument("--json", action="store_true", help="machine-readable output")
     p.add_argument("--board-dir", help="operate on an existing checkout of the board branch (CI use)")
     sub = p.add_subparsers(dest="cmd", required=True)
+    from agentlane.worker import add_parser as add_worker_parser
+    add_worker_parser(sub)
 
     s = sub.add_parser("doctor", help="diagnose setup without changing files or Git refs")
     s.set_defaults(fn=None)
@@ -1712,6 +1714,9 @@ def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
+        if args.cmd == "worker":
+            from agentlane.worker import dispatch
+            return dispatch(args)
         if args.cmd == "doctor":
             from agentlane.inspect import doctor
             return doctor(args)
