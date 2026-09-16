@@ -195,7 +195,7 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(Path(output["root"]), self.clone.resolve())
         expected_main = sh(["git", "rev-parse", "HEAD"], str(self.coordinator)).stdout.strip()
         self.assertEqual(output["remote"], expected_main + "\trefs/heads/main")
-        self.assertEqual((self.clone / output["common"]).resolve(), self.clone / ".git")
+        self.assertEqual((self.clone / output["common"]).resolve(), (self.clone / ".git").resolve())
         for key in removed:
             self.assertIsNone(output["env"][key], key)
         for key, value in preserved.items():
