@@ -8,20 +8,19 @@ import subprocess
 import unittest
 from unittest.mock import patch
 
-from tests.test_board import Fixture, load_board_module, sh
+from tests.support import TestCase, Fixture, load_board_module, sh
 from tests.test_mcp_and_ci import mcp_session
 
 
-class AgentLaneTests(unittest.TestCase):
+class AgentLaneTests(TestCase):
     def setUp(self):
+        super().setUp()
         self.fx = Fixture()
+        self.addCleanup(self.fx.cleanup)
         self.a = self.fx.clone("alice")
         self.fx.board("alice", "init")
         self.fx.board("alice", "join", "--name", "alice", "--agent", "codex")
         self.m = load_board_module()
-
-    def tearDown(self):
-        self.fx.cleanup()
 
     def invoke(self, *argv, gh_result=None):
         args = self.m.build_parser().parse_args(["--json", *argv])

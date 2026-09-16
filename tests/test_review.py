@@ -12,11 +12,12 @@ import unittest
 from unittest.mock import patch
 
 from agentlane import board as core, mcp, review
-from tests.test_board import BOARD, Fixture, sh
+from tests.support import TestCase, BOARD, Fixture, sh
 
 
-class ReviewTests(unittest.TestCase):
+class ReviewTests(TestCase):
     def setUp(self):
+        super().setUp()
         self.fx = Fixture()
         self.addCleanup(self.fx.cleanup)
         self.a = self.fx.clone("alice")
@@ -521,7 +522,7 @@ class ReviewTests(unittest.TestCase):
             review.fetch_target(core.Repo(self.a))
 
 
-class ReviewValidationTests(unittest.TestCase):
+class ReviewValidationTests(TestCase):
     def test_new_metadata_is_strictly_validated(self):
         approval = {"id": "approval", "reviewer": "bob", "timestamp": core.iso(core.now()), "commit": "a" * 40,
                     "base": "b" * 40, "evidence": "tested", "claim": {"owner": "alice", "lease": "a" * 32,

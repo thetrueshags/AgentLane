@@ -14,11 +14,12 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from tests.test_board import BOARD, Fixture, load_board_module, sh
+from tests.support import TestCase, BOARD, Fixture, load_board_module, sh
 
 
-class ValidationTests(unittest.TestCase):
+class ValidationTests(TestCase):
     def setUp(self):
+        super().setUp()
         self.m = load_board_module()
 
     def test_conservative_partial_prefix_and_case_overlap(self):
@@ -61,18 +62,17 @@ class ValidationTests(unittest.TestCase):
         self.assertNotIn("secret-token", str(error.exception))
 
 
-class WorkflowTests(unittest.TestCase):
+class WorkflowTests(TestCase):
     def setUp(self):
+        super().setUp()
         self.fx = Fixture()
+        self.addCleanup(self.fx.cleanup)
         self.a = self.fx.clone("alice")
         self.b = self.fx.clone("bob")
         self.fx.board("alice", "init")
         for name in ("alice", "bob"):
             self.fx.board(name, "join", "--name", name, "--agent", "test")
         self.m = load_board_module()
-
-    def tearDown(self):
-        self.fx.cleanup()
 
     def commit(self, root, path, text="work\n"):
         target = Path(root, path)
@@ -117,8 +117,7 @@ class WorkflowTests(unittest.TestCase):
         with self.m.checkout_lock(repo):
             env = dict(os.environ)
             env.pop("AGENTLANE_LOCK_HELD", None)
-            result = subprocess.run([sys.executable, BOARD, "status", "--json"], cwd=self.a,
-                                    env=env, text=True, capture_output=True)
+            result = sh([sys.executable, BOARD, "status", "--json"], self.a, env=env, check=False)
             self.assertEqual(result.returncode, 1)
             self.assertIn("Another AgentLane command", json.loads(result.stdout)["error"])
         self.fx.board("alice", "status")

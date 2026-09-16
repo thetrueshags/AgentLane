@@ -5,11 +5,12 @@ from pathlib import Path
 import unittest
 
 from agentlane import board as core
-from tests.test_board import Fixture, sh
+from tests.support import TestCase, Fixture, sh
 
 
-class SyncedClaimPushTests(unittest.TestCase):
+class SyncedClaimPushTests(TestCase):
     def setUp(self):
+        super().setUp()
         self.fx = Fixture()
         self.addCleanup(self.fx.cleanup)
         self.seed = str(Path(self.fx.tmp, "seed"))

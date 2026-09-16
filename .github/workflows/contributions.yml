@@ -16,19 +16,13 @@ concurrency:
 
 jobs:
   tests:
-    name: Tests (${{ matrix.os }}, Python ${{ matrix.python }})
-    runs-on: ${{ matrix.os }}
+    name: Tests (ubuntu-latest, Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-latest
-            python: '3.9'
-          - os: ubuntu-latest
-            python: '3.12'
-          - os: windows-latest
-            python: '3.12'
+        python: ['3.9', '3.12']
     steps:
       - uses: actions/checkout@v4
         with:
@@ -40,10 +34,78 @@ jobs:
         run: python -m pip install -e .
       - name: Check syntax and formatting
         run: python tools/check
-      - name: Run the test suite
-        run: python -m unittest discover -v
-      - name: Build and smoke-test the wheel
-        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
+      - name: Run the complete test suite
+        run: python tools/test --report test-results/results.jsonl
+      - name: Preserve test results, including partial runs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tests-ubuntu-${{ matrix.python }}
+          path: test-results/
+          if-no-files-found: warn
+      - name: Build and exercise the wheel outside the checkout
+        if: matrix.python == '3.12'
         run: |
-          python -m pip wheel . --no-deps --wheel-dir "$RUNNER_TEMP/agentlane-wheels"
-          python tools/check-package "$RUNNER_TEMP"/agentlane-wheels/agentlane-*.whl
+          python -m pip wheel . --no-deps --wheel-dir dist
+          python tools/check-package dist/agentlane-*.whl
+
+  windows-shards:
+    name: Windows tests (shard ${{ matrix.shard }})
+    runs-on: windows-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install the CLI
+        run: python -m pip install -e .
+      - name: Check syntax and formatting
+        run: python tools/check
+      - name: Run this test partition
+        run: python tools/test --shard-index ${{ matrix.shard }} --shard-count 3 --report test-results/results.jsonl
+      - name: Preserve test results, including partial runs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tests-windows-3.12-${{ matrix.shard }}
+          path: test-results/
+          if-no-files-found: warn
+
+  windows-wheel:
+    name: Wheel (windows-latest, Python 3.12)
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build the wheel
+        run: python -m pip wheel . --no-deps --wheel-dir dist
+      - name: Install and exercise the wheel outside the checkout
+        shell: bash
+        run: python tools/check-package dist/agentlane-*.whl
+
+  # Preserve the existing required check: success requires all Windows coverage.
+  windows-tests:
+    name: Tests (windows-latest, Python 3.12)
+    needs: [windows-shards, windows-wheel]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every Windows shard and the wheel check to pass
+        env:
+          SHARD_RESULT: ${{ needs.windows-shards.result }}
+          WHEEL_RESULT: ${{ needs.windows-wheel.result }}
+        run: |
+          test "$SHARD_RESULT" = success
+          test "$WHEEL_RESULT" = success

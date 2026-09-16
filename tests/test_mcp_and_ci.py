@@ -1,11 +1,11 @@
 """The MCP wrapper over stdio, and the --board-dir mode the workflows use."""
 import json
 import os
-import subprocess
+from pathlib import Path
 import sys
 import unittest
 
-from tests.test_board import BOARD, ROOT, Fixture, sh
+from tests.support import TestCase, BOARD, ROOT, Fixture, sh
 
 MCP = os.path.join(ROOT, "tools", "board-mcp")
 
@@ -15,22 +15,20 @@ def mcp_session(cwd, env, requests):
     full = dict(os.environ)
     full.update(env)
     full["BOARD_REPO_ROOT"] = cwd
-    p = subprocess.run([sys.executable, MCP], cwd=cwd, env=full, input=payload, text=True,
-                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    p = sh([sys.executable, MCP], cwd, env=full, input_text=payload, check=False)
     if p.returncode:
         raise AssertionError("MCP server failed: " + p.stderr)
     return [json.loads(line) for line in p.stdout.split("\n") if line.strip()]
 
 
-class McpWrapperTests(unittest.TestCase):
+class McpWrapperTests(TestCase):
     def setUp(self):
+        super().setUp()
         self.fx = Fixture()
+        self.addCleanup(self.fx.cleanup)
         self.a = self.fx.clone("alice")
         self.fx.board("alice", "init")
         self.env = {"BOARD_MEMBER": "alice", "BOARD_AGENT": "claude-code"}
-
-    def tearDown(self):
-        self.fx.cleanup()
 
     def test_initialize_list_and_call(self):
         replies = mcp_session(self.a, self.env, [
@@ -80,9 +78,11 @@ class McpWrapperTests(unittest.TestCase):
         self.assertIn("alice", r["content"][0]["text"])
 
 
-class BoardDirModeTests(unittest.TestCase):
+class BoardDirModeTests(TestCase):
     def setUp(self):
+        super().setUp()
         self.fx = Fixture()
+        self.addCleanup(self.fx.cleanup)
         self.a = self.fx.clone("alice")
         self.fx.board("alice", "init")
         self.fx.board("alice", "join", "--name", "alice", "--agent", "claude-code")
@@ -91,9 +91,6 @@ class BoardDirModeTests(unittest.TestCase):
         sh(["git", "clone", "-q", self.fx.origin, self.ci], self.fx.tmp)
         self.data_dir = os.path.join(self.ci, "board-data")
         sh(["git", "clone", "-q", "-b", "board", self.fx.origin, self.data_dir], self.fx.tmp)
-
-    def tearDown(self):
-        self.fx.cleanup()
 
     def test_expire_narrate_render_against_a_checkout(self):
         env = {"BOARD_MEMBER": "board"}
@@ -106,7 +103,7 @@ class BoardDirModeTests(unittest.TestCase):
         p = sh([sys.executable, BOARD, "--json", "--board-dir", self.data_dir, "narrate"], self.ci, env=env)
         self.assertEqual(json.loads(p.stdout.strip().split("\n")[-1])["posted"], 0, "narrator must not repeat")
         sh([sys.executable, BOARD, "--board-dir", self.data_dir, "render"], self.ci, env=env)
-        board_md = open(os.path.join(self.data_dir, "BOARD.md")).read()
+        board_md = Path(self.data_dir, "BOARD.md").read_text(encoding="utf-8")
         self.assertIn("Login page", board_md)
         self.assertIn("## Available", board_md)
 

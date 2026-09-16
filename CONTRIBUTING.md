@@ -43,12 +43,14 @@ suite has no runtime dependencies. Install the CLI for development with `python3
 
    ```sh
    python3 tools/check
-   python3 -m unittest discover -v
+   python3 tools/test
    ```
 
    On Windows, `python` can be used if it selects the intended interpreter. Tests use the
    selected Python interpreter, temporary Git repositories and simulated
    GitHub PR responses; they do not need access to a live team board or GitHub credentials.
+   `python3 -m unittest discover -v` is still supported. See [test development](docs/testing.md)
+   for targeted runs, CI shards, result artifacts and fixture isolation.
 
 5. Commit and push your branch to your fork, then open a PR with **base repository
    `thetrueshags/AgentLane`, base branch `main`**. The PR template helps explain the change.
@@ -64,7 +66,8 @@ suite has no runtime dependencies. Install the CLI for development with `python3
 - Do not include credentials, personal board data or unrelated generated files.
 - Agent-assisted contributions are welcome. Review the result yourself and report what was tested.
 
-The PR checks run on Linux with Python 3.9 and 3.12, and on Windows with Python 3.12. They use
+The PR checks run the complete suite on Linux with Python 3.9 and 3.12, and across three
+disjoint Windows jobs with Python 3.12. Wheel installation is checked on both operating systems. They use
 a read-only token and no repository secrets. GitHub may ask a maintainer to approve a first-time
 contributor's workflow run. A passing check supports review; the maintainer decides when to merge.
 
