@@ -8,7 +8,7 @@ import sys
 
 root = Path(__file__).resolve().parent.parent
 files = list((root / "agentlane").rglob("*.py")) + list((root / "tests").glob("*.py"))
-files += [root / p for p in ("bin/board", "tools/board-mcp", "tools/simulate", "tools/check", "tools/check-package")]
+files += [root / p for p in ("bin/board", "tools/board-mcp", "tools/simulate", "tools/check", "tools/check-package", "tools/test")]
 errors = []
 for path in files:
     text = path.read_text(encoding="utf-8")

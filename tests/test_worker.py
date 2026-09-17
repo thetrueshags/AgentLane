@@ -10,7 +10,7 @@ import tempfile
 import time
 import unittest
 
-from tests.test_board import BOARD, ROOT, Fixture, sh
+from tests.support import TestCase, BOARD, ROOT, Fixture, sh
 from tests.test_mcp_and_ci import mcp_session
 
 
@@ -44,9 +44,11 @@ def windows_processes(pids):
             api.CloseHandle(handle)
 
 
-class WorkerTests(unittest.TestCase):
+class WorkerTests(TestCase):
     def setUp(self):
+        super().setUp()
         self.tmp = tempfile.TemporaryDirectory(prefix="agentlane-worker-")
+        self.addCleanup(self.tmp.cleanup)
         self.base = Path(self.tmp.name)
         self.coordinator = self.base / "coordinator"
         self.coordinator.mkdir()
@@ -132,8 +134,7 @@ class WorkerTests(unittest.TestCase):
             self.assertEqual(sh(["git", "status", "--porcelain"], str(repo)).stdout, "")
             self.assertNotIn("board", sh(["git", "branch", "-a"], str(repo)).stdout)
         self.assertFalse((self.clone / ".git/agentlane-worker.json").exists())
-        human = subprocess.run([sys.executable, BOARD, "worker", "show", receipt["run_id"]],
-                               cwd=self.coordinator, capture_output=True, text=True)
+        human = sh([sys.executable, BOARD, "worker", "show", receipt["run_id"]], self.coordinator)
         self.assertIn("not task completion", human.stdout)
 
     def test_unicode_clone_path_preserves_working_directory(self):
@@ -239,8 +240,12 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(self.cli("show", "../escape").returncode, 1)
         self.assertEqual(self.run_worker(options=("--stdin-file", "missing-file")).returncode, 1)
 
+    def held_worker_code(self):
+        return ("import time; from pathlib import Path; print('ready', flush=True); "
+                "exec(%r)" % ("while not Path(%r).exists():\n time.sleep(.02)" % str(self.base / "release")))
+
     def test_same_clone_alias_worktree_and_other_registry_refused(self):
-        process = self.start(options=("--timeout", "5"))
+        process = self.start(code=self.held_worker_code())
         receipt = self.running()[0]
         worktree = self.base / "worker-linked"
         sh(["git", "worktree", "add", "-q", "--detach", str(worktree)], str(self.clone))
@@ -255,22 +260,30 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(self.cli("resolve", receipt["run_id"], "--acknowledge-stopped").returncode, 1)
         shown = json.loads(self.cli("show", receipt["run_id"]).stdout)
         self.assertEqual(shown["status"], "running")
-        self.assertIn("ready", Path(shown["stdout_log"]).read_text())
+        self.wait_for(lambda: "ready" in Path(shown["stdout_log"]).read_text())
+        (self.base / "release").touch()
         stdout, stderr = process.communicate(timeout=15)
-        self.assertEqual(json.loads(stdout)["status"], "interrupted", stderr)
+        self.assertEqual(json.loads(stdout)["status"], "exited", stderr)
 
     def test_simultaneous_same_clone_and_different_clones(self):
-        first = self.start(options=("--timeout", "3"))
-        second = self.start(options=("--timeout", "3"))
+        first = self.start(code=self.held_worker_code())
+        second = self.start(code=self.held_worker_code())
+        self.wait_for(lambda: any(p.poll() is not None for p in (first, second)))
+        self.running()
+        (self.base / "release").touch()
         outputs = [p.communicate(timeout=15) for p in (first, second)]
-        self.assertEqual(sorted(p.returncode for p in (first, second)), [1, 124], outputs)
+        self.assertEqual(sorted(p.returncode for p in (first, second)), [0, 1], outputs)
+        refused = outputs[0] if first.returncode else outputs[1]
+        self.assertIn("lock", refused[0])
+        (self.base / "release").unlink()
         other = self.base / "other-clone"
         sh(["git", "clone", "-q", str(self.coordinator), str(other)], str(self.base))
-        processes = [self.start(clone=clone, options=("--timeout", "3")) for clone in (self.clone, other)]
+        processes = [self.start(clone=clone, code=self.held_worker_code()) for clone in (self.clone, other)]
         self.wait_for(lambda: len([r for r in json.loads(self.cli("list").stdout) if r["status"] == "running"]) == 2)
+        (self.base / "release").touch()
         for process in processes:
             stdout, stderr = process.communicate(timeout=15)
-            self.assertEqual(json.loads(stdout)["status"], "interrupted", stderr)
+            self.assertEqual(json.loads(stdout)["status"], "exited", stderr)
 
     def tree_code(self, exit_parent=False):
         # A descendant continually changes a file so cleanup can be proved without trusting a PID.
@@ -480,7 +493,7 @@ class WorkerTests(unittest.TestCase):
             self.assertIn(receipt["run_id"], reply["result"]["content"][0]["text"])
 
 
-class WorkerBoardCompatibilityTests(unittest.TestCase):
+class WorkerBoardCompatibilityTests(TestCase):
     def test_child_board_command_uses_own_checkout_lock_and_task_is_unchanged(self):
         fx = Fixture()
         try:

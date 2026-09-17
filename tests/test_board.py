@@ -1,106 +1,16 @@
-"""Tests for bin/board against real git repos in a temp dir: a bare origin and two member clones."""
-import importlib.machinery
-import importlib.util
+"""Board behavior against independent real Git repositories."""
 import json
 import os
-import shutil
-import stat
-import subprocess
-import sys
-import tempfile
+from pathlib import Path
 import time
 import unittest
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.dirname(HERE)
-BOARD = os.path.join(ROOT, "bin", "board")
+from tests.support import BOARD, ROOT, Fixture, TestCase, load_board_module, sh
 
 
-def load_board_module():
-    loader = importlib.machinery.SourceFileLoader("boardmod", os.path.join(ROOT, "agentlane", "board.py"))
-    spec = importlib.util.spec_from_loader("boardmod", loader)
-    mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
-    return mod
-
-
-def sh(cmd, cwd, env=None, check=True, input_text=None):
-    full = dict(os.environ)
-    full.update({"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
-                 "GIT_COMMITTER_EMAIL": "t@t", "GIT_CONFIG_NOSYSTEM": "1"})
-    if env:
-        full.update(env)
-    p = subprocess.run(cmd, cwd=cwd, env=full, text=True, input=input_text,
-                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if check and p.returncode != 0:
-        raise AssertionError("failed: %s\nstdout:%s\nstderr:%s" % (" ".join(cmd), p.stdout, p.stderr))
-    return p
-
-
-class Fixture:
-    """One bare origin with a main branch carrying AgentLane files, plus named member clones."""
-
-    def __init__(self):
-        self.tmp = tempfile.mkdtemp(prefix="board-test-")
-        self.origin = os.path.join(self.tmp, "origin.git")
-        sh(["git", "init", "-q", "--bare", "-b", "main", self.origin], self.tmp)
-        seed = os.path.join(self.tmp, "seed")
-        sh(["git", "clone", "-q", self.origin, seed], self.tmp)
-        shutil.copytree(os.path.join(ROOT, "agentlane"), os.path.join(seed, "agentlane"),
-                        ignore=shutil.ignore_patterns("__pycache__"))
-        for rel in (".gitattributes", ".gitignore", ".mcp.json", ".codex/config.toml", "bin/board", ".harness/config.json", ".harness/.gitignore", ".harness/hooks/pre-push",
-                    ".harness/gate/code.sh", ".harness/gate/docs.sh"):
-            dst = os.path.join(seed, rel)
-            os.makedirs(os.path.dirname(dst), exist_ok=True)
-            shutil.copy(os.path.join(ROOT, rel), dst)
-        os.makedirs(os.path.join(seed, "src", "auth"))
-        os.makedirs(os.path.join(seed, "docs"))
-        open(os.path.join(seed, "src", "auth", "login.py"), "w").write("def login():\n    return True\n")
-        open(os.path.join(seed, "docs", "README.md"), "w").write("# project\n")
-        open(os.path.join(seed, "README.md"), "w").write("# project\n")
-        cfg = json.load(open(os.path.join(seed, ".harness", "config.json")))
-        cfg["hot_paths"] = ["package.json"]
-        json.dump(cfg, open(os.path.join(seed, ".harness", "config.json"), "w"))
-        sh(["git", "add", "-A"], seed)
-        sh(["git", "commit", "-q", "-m", "seed"], seed)
-        sh(["git", "push", "-q", "origin", "main"], seed)
-        self.clones = {}
-
-    def clone(self, member):
-        path = os.path.join(self.tmp, member)
-        sh(["git", "clone", "-q", self.origin, path], self.tmp)
-        sh(["git", "config", "user.name", member], path)
-        sh(["git", "config", "user.email", member + "@t"], path)
-        self.clones[member] = path
-        return path
-
-    def board(self, member, *args, check=True, input_text=None, extra_env=None):
-        path = self.clones[member]
-        env = {"BOARD_MEMBER": member, "BOARD_AGENT": "test-agent"}
-        if extra_env:
-            env.update(extra_env)
-        return sh([sys.executable, BOARD, "--json"] + list(args), path, env=env, check=check, input_text=input_text)
-
-    def data(self, p):
-        return json.loads(p.stdout)
-
-    def reject_next_push_to(self, ref):
-        """Installs an origin pre-receive hook that rejects the first push to `ref`, then allows all."""
-        hook = os.path.join(self.origin, "hooks", "pre-receive")
-        marker = os.path.join(self.tmp, "rejected-" + ref.replace("/", "_"))
-        with open(hook, "w") as f:
-            f.write("#!/usr/bin/env bash\nwhile read old new ref; do\n"
-                    "  if [ \"$ref\" = \"%s\" ] && [ ! -f \"%s\" ]; then touch \"%s\"; echo 'simulated race' >&2; exit 1; fi\n"
-                    "done\nexit 0\n" % (ref, marker, marker))
-        os.chmod(hook, stat.S_IRWXU)
-        return marker
-
-    def cleanup(self):
-        shutil.rmtree(self.tmp, ignore_errors=True)
-
-
-class GlobOverlapTests(unittest.TestCase):
+class GlobOverlapTests(TestCase):
     def setUp(self):
+        super().setUp()
         self.m = load_board_module()
 
     def test_directory_vs_file(self):
@@ -127,17 +37,16 @@ class GlobOverlapTests(unittest.TestCase):
         self.assertEqual(self.m.paths_outside(["src/auth/a.py", "docs/x.md"], ["src/auth/**"]), ["docs/x.md"])
 
 
-class BoardFlowTests(unittest.TestCase):
+class BoardFlowTests(TestCase):
     def setUp(self):
+        super().setUp()
         self.fx = Fixture()
+        self.addCleanup(self.fx.cleanup)
         self.a = self.fx.clone("alice")
         self.b = self.fx.clone("bob")
         self.fx.board("alice", "init")
         self.fx.board("alice", "join", "--name", "alice", "--agent", "claude-code")
         self.fx.board("bob", "join", "--name", "bob", "--agent", "cursor")
-
-    def tearDown(self):
-        self.fx.cleanup()
 
     def test_init_creates_board_branch_with_board_md(self):
         p = sh(["git", "ls-remote", "--heads", self.fx.origin, "board"], self.fx.tmp)
@@ -222,9 +131,11 @@ class BoardFlowTests(unittest.TestCase):
         self.assertEqual(st["stuck"], [])
 
 
-class LandingTests(unittest.TestCase):
+class LandingTests(TestCase):
     def setUp(self):
+        super().setUp()
         self.fx = Fixture()
+        self.addCleanup(self.fx.cleanup)
         self.a = self.fx.clone("alice")
         self.b = self.fx.clone("bob")
         self.fx.board("alice", "init")
@@ -232,9 +143,6 @@ class LandingTests(unittest.TestCase):
         self.fx.board("bob", "join", "--name", "bob", "--agent", "codex")
         self.fx.board("alice", "install", "--name", "alice", "--agent", "claude-code")
         self.fx.board("bob", "install", "--name", "bob", "--agent", "codex")
-
-    def tearDown(self):
-        self.fx.cleanup()
 
     def commit(self, clone, rel, content, msg="work"):
         path = os.path.join(clone, rel)
@@ -320,19 +228,18 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class RegressionTests(unittest.TestCase):
+class RegressionTests(TestCase):
     """Defects found by tools/simulate on 2026-09-15."""
 
     def setUp(self):
+        super().setUp()
         self.fx = Fixture()
+        self.addCleanup(self.fx.cleanup)
         self.a = self.fx.clone("alice")
         self.b = self.fx.clone("bob")
         self.fx.board("alice", "init")
         self.fx.board("alice", "join", "--name", "alice", "--agent", "claude-code")
         self.fx.board("bob", "join", "--name", "bob", "--agent", "codex")
-
-    def tearDown(self):
-        self.fx.cleanup()
 
     def commit(self, clone, rel, content):
         path = os.path.join(clone, rel)
@@ -360,9 +267,9 @@ class RegressionTests(unittest.TestCase):
 
     def test_heartbeat_window_is_clamped_below_the_stall_window(self):
         cfg_path = os.path.join(self.a, ".harness", "config.json")
-        cfg = json.load(open(cfg_path))
+        cfg = json.loads(Path(cfg_path).read_text(encoding="utf-8"))
         cfg["stall_release_minutes"] = 0.05
-        json.dump(cfg, open(cfg_path, "w"))
+        Path(cfg_path).write_text(json.dumps(cfg), encoding="utf-8")
         sh(["git", "add", "-A"], self.a)
         sh(["git", "commit", "-q", "-m", "short stall window"], self.a)
         sh(["git", "push", "-q", "origin", "main"], self.a)
