@@ -1,9 +1,13 @@
 """Board behavior against independent real Git repositories."""
+import argparse
+import contextlib
+import datetime as dt
+import io
 import json
 import os
 from pathlib import Path
-import time
 import unittest
+from unittest.mock import patch
 
 from tests.support import BOARD, ROOT, Fixture, TestCase, load_board_module, sh
 
@@ -266,17 +270,44 @@ class RegressionTests(TestCase):
         self.assertEqual(forced["written"], 1)
 
     def test_heartbeat_window_is_clamped_below_the_stall_window(self):
-        cfg_path = os.path.join(self.a, ".harness", "config.json")
-        cfg = json.loads(Path(cfg_path).read_text(encoding="utf-8"))
-        cfg["stall_release_minutes"] = 0.05
-        Path(cfg_path).write_text(json.dumps(cfg), encoding="utf-8")
-        sh(["git", "add", "-A"], self.a)
-        sh(["git", "commit", "-q", "-m", "short stall window"], self.a)
-        sh(["git", "push", "-q", "origin", "main"], self.a)
         self.fx.board("alice", "take", "--new", "Login page", "--globs", "src/auth/**")
-        time.sleep(1.2)
-        res = self.fx.data(self.fx.board("alice", "heartbeat"))
-        self.assertEqual(res["written"], 1, "with a 3 second stall window a heartbeat after 1.2s must be written")
+        m = load_board_module()
+        repo = m.Repo(self.a)
+        repo.cfg.update(stall_release_minutes=0.05, heartbeat_min_seconds=60)
+        board = m.Board(repo)
+        board.sync()
+        claim = board.claim("AL-1")
+        started = m.parse_iso(claim["last_heartbeat"])
+        before = self.board_commit_count()
+
+        def heartbeat(seconds, force=False):
+            args = argparse.Namespace(board_dir=None, force=force, text=None, quiet=False, json=True)
+            output = io.StringIO()
+            # Exercise real fetch/mutate/push at a fixed claim age, independent of Git latency.
+            with patch.object(m, "now", return_value=started + dt.timedelta(seconds=seconds)), \
+                    contextlib.redirect_stdout(output):
+                m.cmd_heartbeat(args, repo)
+            return json.loads(output.getvalue())
+
+        self.assertEqual(heartbeat(0)["written"], 0)
+        board.sync()
+        self.assertEqual(board.claim("AL-1"), claim)
+        self.assertEqual(self.board_commit_count(), before)
+
+        self.assertEqual(heartbeat(1)["written"], 1, "the 60s interval must clamp to 3s / 3")
+        board.sync()
+        refreshed = board.claim("AL-1")
+        self.assertEqual(refreshed["last_heartbeat"], m.iso(started + dt.timedelta(seconds=1)))
+        self.assertEqual(self.board_commit_count(), before + 1)
+
+        self.assertEqual(heartbeat(1)["written"], 0, "a just-refreshed claim must not write again")
+        # Inactivity is measured from the refresh at t=1, so it expires exactly at t=4.
+        for force in (False, True):
+            with self.subTest(force=force), self.assertRaisesRegex(m.BoardError, "expired; re-take"):
+                heartbeat(4, force=force)
+        board.sync()
+        self.assertEqual(board.claim("AL-1"), refreshed)
+        self.assertEqual(self.board_commit_count(), before + 1)
 
     def test_done_explains_an_expired_claim_and_how_to_recover(self):
         self.fx.board("alice", "take", "--new", "Login page", "--globs", "src/auth/**", "--ttl", "0")
