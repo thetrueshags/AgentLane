@@ -56,6 +56,10 @@ Linux Python 3.12 and the separate Windows wheel job install the built package i
 - Use readiness and release signals for concurrency tests. Keep actual short deadlines
   in tests specifically exercising timeouts. A locking test must not depend on completing
   unrelated Git operations before a worker expires.
+- For heartbeat and expiry boundaries, patch the board module's `now()` and call the command
+  in process while retaining real Git transactions. Assert saved timestamps and board commits
+  as well as command output. Sleeping inside a short claim lifetime makes runner speed part
+  of the assertion and can reject a claim before the behavior under test is reached.
 - Keep real Git coverage for ownership, hooks, races, review and atomic landing. Test pure
   validation directly. Improving runtime must not remove assertions or replace the behavior
   under test with mocks. Use the per-test timings to select further optimizations.
