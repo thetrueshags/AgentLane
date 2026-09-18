@@ -44,8 +44,14 @@ Pages refresh themselves with a `<meta http-equiv="refresh">` tag; `--refresh 0`
 - **Bounded logs.** Worker stdout can reach tens of megabytes. Only the last 64 KiB of a log is
   read, and the page says the view is truncated and how large the file is.
 - **No fetching.** The dashboard shows the board checkout exactly as the last AgentLane command
-  left it; it never fetches, never writes and never takes the checkout lock, so it cannot block or
-  race a worker. Run `agentlane status` or any other command in that checkout to refresh the
-  board, and the next page load shows the new state.
+  left it; it never fetches, never writes and never takes the checkout lock. Run `agentlane
+  status` or any other command in that checkout to refresh the board, and the next page load
+  shows the new state.
+- **One shared lock is touched.** Listing sessions reuses the liveness check behind `agentlane
+  worker list`, which takes a clone's non-blocking worker lock for a receipt still marked running.
+  It cannot block anything, but a `worker run` starting in that same sub-millisecond window can
+  fail with "Clone worker lock is active or inaccessible"; retry it.
 - It reads only the board checkout and `agentlane-workers/` under this coordinator's Git common
-  directory. Worker logs can contain secrets, which is one more reason the bind stays local.
+  directory, and a run's log only from inside that run's own receipt directory: a receipt naming a
+  path outside it is refused on the page. Worker logs can contain secrets, one more reason to
+  keep the bind local.

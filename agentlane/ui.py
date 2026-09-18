@@ -28,13 +28,13 @@ STYLE = """
 body{font:14px/1.5 ui-sans-serif,Segoe UI,system-ui,sans-serif;margin:0;background:Canvas;color:CanvasText}
 header{display:flex;gap:1.5rem;align-items:baseline;padding:.6rem 1rem;border-bottom:1px solid #8884}
 h1{font-size:1rem;margin:0;letter-spacing:.08em;text-transform:uppercase}
+h2{font-size:.95rem;margin:1.4rem 0 .4rem;text-transform:uppercase;letter-spacing:.05em;opacity:.75}
 nav a{margin-right:1rem;text-decoration:none;color:inherit;opacity:.65}
 nav a.on{opacity:1;font-weight:600;border-bottom:2px solid currentColor}
 main{padding:1rem;max-width:72rem}
-h2{font-size:.95rem;margin:1.4rem 0 .4rem;text-transform:uppercase;letter-spacing:.05em;opacity:.75}
 table{border-collapse:collapse;width:100%;margin-bottom:.5rem}
 th,td{text-align:left;padding:.3rem .6rem;border-bottom:1px solid #8883;vertical-align:top}
-th{font-size:.75rem;text-transform:uppercase;opacity:.6}
+th,dt{font-size:.75rem;text-transform:uppercase;opacity:.6}
 pre{white-space:pre-wrap;word-break:break-word;background:#8881;padding:.6rem;border-radius:4px;
 margin:.3rem 0;font:12px/1.45 ui-monospace,Consolas,monospace}
 .badge{display:inline-block;padding:0 .4rem;border-radius:999px;font-size:.72rem;border:1px solid #8886}
@@ -43,7 +43,6 @@ margin:.3rem 0;font:12px/1.45 ui-monospace,Consolas,monospace}
 .entry{border-bottom:1px solid #8883;padding:.4rem 0}
 .meta{font-size:.78rem;opacity:.7}.empty{opacity:.7;font-style:italic}
 dl{display:grid;grid-template-columns:max-content 1fr;gap:.15rem .8rem;margin:.3rem 0}
-dt{font-size:.78rem;text-transform:uppercase;opacity:.6}
 dd{margin:0;word-break:break-word}
 """
 # Control characters (including the ESC that starts a terminal escape sequence) never reach a page.
@@ -307,10 +306,19 @@ def duration(run):
     return span((finished or core.now()) - started) + ("" if finished else " so far")
 
 
-def log_block(run, stream):
+def log_block(reader, run, stream):
+    """A receipt names its own log paths, so follow one only inside that run's receipt directory."""
     path = run.get(stream + "_log")
-    if not path or not os.path.isfile(path):
-        return "<h2>%s</h2><p class=\"empty\">No %s log on disk.</p>" % (escape(stream), escape(stream))
+    home = os.path.realpath(str(reader.registry / run["run_id"]))
+    try:
+        inside = bool(path) and os.path.normcase(
+            os.path.commonpath([home, os.path.realpath(path)])) == os.path.normcase(home)
+    except ValueError:
+        inside = False  # A different drive cannot share a prefix with the receipt directory.
+    if not inside or not os.path.isfile(path):
+        why = "not a file on disk" if inside else "outside this run's receipt directory " + home
+        return '<h2>%s</h2><p class="empty">No %s log read: %s is %s.</p>' % (
+            escape(stream), escape(stream), escape(path or "the receipt's empty log path"), escape(why))
     text, truncated, size = tail(path)
     note = ("last %d of %d bytes; truncated" % (LOG_TAIL_BYTES, size)) if truncated else ("%d bytes" % size)
     return '<h2>%s</h2><p class="meta">%s &middot; %s</p><pre>%s</pre>' % (
@@ -326,7 +334,7 @@ def sessions_section(reader, selected):
     for run in chosen[:3]:
         parts.append("<h2>Output of %s (%s)</h2>" % (escape(run["run_id"]), escape(run.get("name"))))
         for stream in ("stdout", "stderr"):
-            parts.append(log_block(run, stream))
+            parts.append(log_block(reader, run, stream))
     return "".join(parts)
 
 
