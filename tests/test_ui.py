@@ -197,6 +197,17 @@ class UITests(TestCase):
         self.assertIn("truncated", body.lower())
         self.assertLess(len(body), 4 * ui.LOG_TAIL_BYTES)
 
+    def test_log_path_outside_the_receipt_directory_is_refused(self):
+        self.seed()
+        (self.tmp / "outside.txt").write_text("SECRET_FILE_CONTENT\n", encoding="utf-8")
+        for planted in (str(self.tmp / "outside.txt"),
+                        str(self.registry / OLD_RUN / ".." / ".." / ".." / "outside.txt")):
+            receipt(self.registry / OLD_RUN, OLD_RUN, self.common, stdout_log=planted)
+            status, body = self.get("/sessions?run=" + OLD_RUN)
+            self.assertEqual(status, 200)
+            self.assertNotIn("SECRET_FILE_CONTENT", body)
+            self.assertIn("outside this run&#x27;s receipt directory", body)
+
     def test_unreadable_receipt_does_not_break_the_sessions_view(self):
         self.seed()
         broken = self.registry / ("c" * 32)
@@ -210,8 +221,12 @@ class UITests(TestCase):
         for host in ("0.0.0.0", "192.0.2.10", "::"):
             with self.assertRaises(core.BoardError):
                 ui.make_server(self.reader(), host, 0, 5)
-        for host in ("127.0.0.1", "localhost"):
-            server = ui.make_server(self.reader(), host, 0, 5)
+        for host in ("127.0.0.1", "localhost", "::1"):
+            try:
+                server = ui.make_server(self.reader(), host, 0, 5)
+            except OSError as error:  # a host with IPv6 disabled, which is not a refusal
+                self.assertEqual(host, "::1", error)
+                continue
             server.server_close()
 
     def test_server_serves_no_mutating_methods(self):
