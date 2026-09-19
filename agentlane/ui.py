@@ -129,7 +129,8 @@ class Reader:
         found = []
         for path in sorted(self.registry.glob("*/receipt.json")):
             try:
-                found.append(workers.status(path))
+                # Receipt snapshot only: status() probes another clone's exclusive launch lock.
+                found.append(workers.read_receipt(path))
             except (core.BoardError, OSError) as error:
                 found.append({"run_id": path.parent.name, "name": "-", "status": "unreadable",
                               "task": None, "command": [], "started": None, "finished": None,
@@ -137,7 +138,7 @@ class Reader:
         found.sort(key=lambda run: run.get("started") or "", reverse=True)
         return [r for r in found if task is None or r.get("task") == task]
 
-    def activity(self, limit=ACTIVITY_LIMIT):
+    def activity(self):
         """Claims, approvals, landings and notes from every worker, newest first."""
         merged = self.board.all_events()
         seen = {(r.get("ts"), r.get("member"), r.get("text")) for r in merged}
@@ -145,7 +146,7 @@ class Reader:
             if (note.get("ts"), note.get("member"), note.get("text")) not in seen:
                 merged.append(dict(note, type="note"))
         merged.sort(key=lambda r: (r.get("ts") or "", r.get("member") or ""), reverse=True)
-        return merged[:limit]
+        return merged
 
 
 def badge(text, kind=""):
@@ -198,12 +199,35 @@ def claim_cell(row, cfg, at):
     return " ".join(marks)
 
 
+def checkout_notice(reader):
+    """Distinguish missing data from an empty tasks directory without invoking Git."""
+    directory = Path(reader.board.dir)
+    if not directory.is_dir():
+        reason = "Board checkout missing: the configured path is not a directory."
+    elif not (directory / "tasks").is_dir():
+        reason = "No tasks directory: this path does not look like a board checkout."
+    else:
+        return ""
+    return ('<p class="empty">%s Path: %s. Check --board-dir; it must name the board checkout. '
+            'Run <code>agentlane status</code> in the project clone to create or refresh its '
+            'default board checkout, then reload.</p>' % (escape(reason), escape(directory)))
+
+
+def snapshot_guidance(reader):
+    return ('<p>This is a snapshot of the local board checkout at %s. '
+            'Run <code>agentlane status</code> in the project clone to refresh its default board checkout, '
+            'then reload. If using --board-dir, check that it points to the refreshed checkout.</p>'
+            % escape(reader.board.dir))
+
+
 def overview_section(reader):
+    notice = checkout_notice(reader)
+    if notice:
+        return "<h2>Overview</h2>" + notice
     at = core.now()
     rows = reader.overview()
     if not rows:
-        return ('<h2>Overview</h2><p class="empty">No tasks on this board yet, or no board checkout at %s. '
-                "Run an AgentLane command such as agentlane status to create and refresh it.</p>"
+        return ('<h2>Overview</h2><p class="empty">No tasks in the local board snapshot at %s.</p>'
                 % escape(reader.board.dir))
     parts = ["<h2>Overview</h2><p class=\"meta\">%s tasks in %s</p>" % (len(rows), escape(reader.board.dir))]
     for state in STATES:
@@ -295,6 +319,8 @@ def task_section(reader, task):
 
 
 def status_badge(run):
+    if run.get("status") == "running":
+        return badge("running (unverified)", "warn")
     kind = {"exited": "ok", "running": "ok", "failed": "bad", "unreadable": "bad"}.get(run.get("status"), "warn")
     return badge(run.get("status") or "unknown", kind)
 
@@ -310,16 +336,18 @@ def log_block(reader, run, stream):
     """A receipt names its own log paths, so follow one only inside that run's receipt directory."""
     path = run.get(stream + "_log")
     home = os.path.realpath(str(reader.registry / run["run_id"]))
+    resolved = os.path.realpath(path) if path else ""
     try:
         inside = bool(path) and os.path.normcase(
-            os.path.commonpath([home, os.path.realpath(path)])) == os.path.normcase(home)
+            os.path.commonpath([home, resolved])) == os.path.normcase(home)
     except ValueError:
         inside = False  # A different drive cannot share a prefix with the receipt directory.
-    if not inside or not os.path.isfile(path):
+    if not inside or not os.path.isfile(resolved):
         why = "not a file on disk" if inside else "outside this run's receipt directory " + home
         return '<h2>%s</h2><p class="empty">No %s log read: %s is %s.</p>' % (
             escape(stream), escape(stream), escape(path or "the receipt's empty log path"), escape(why))
-    text, truncated, size = tail(path)
+    # Reuse the checked path; this is not protection against replacing its components concurrently.
+    text, truncated, size = tail(resolved)
     note = ("last %d of %d bytes; truncated" % (LOG_TAIL_BYTES, size)) if truncated else ("%d bytes" % size)
     return '<h2>%s</h2><p class="meta">%s &middot; %s</p><pre>%s</pre>' % (
         escape(stream), escape(path), escape(note), escape(text))
@@ -338,17 +366,34 @@ def sessions_section(reader, selected):
     return "".join(parts)
 
 
-def activity_section(reader):
+def activity_section(reader, number=1):
+    notice = checkout_notice(reader)
+    if notice:
+        return 200, "<h2>Activity</h2>" + notice
     records = reader.activity()
+    total = len(records)
+    pages = max(1, (total + ACTIVITY_LIMIT - 1) // ACTIVITY_LIMIT)
+    if number > pages:
+        return 404, ('<h2>Activity page not found</h2><p>The local snapshot has %d pages. %s</p>'
+                     % (pages, link("/activity", "View latest activity")))
     if not records:
-        return '<h2>Activity</h2><p class="empty">No notes or events on this board yet.</p>'
-    parts = ['<h2>Activity</h2><p class="meta">%d most recent entries, newest first</p>' % len(records)]
-    for record in records:
+        return 200, '<h2>Activity</h2><p class="empty">No notes or events on this board yet.</p>'
+    start = (number - 1) * ACTIVITY_LIMIT
+    end = min(start + ACTIVITY_LIMIT, total)
+    links = []
+    if number > 1:
+        links.append(link("/activity?page=%d" % (number - 1), "Newer"))
+    if number < pages:
+        links.append(link("/activity?page=%d" % (number + 1), "Older"))
+    navigation = '<nav aria-label="Activity pages">%s</nav>' % " ".join(links)
+    parts = ['<h2>Activity</h2><p class="meta">Entries %d-%d of %d, newest first. Page %d of %d.</p>'
+             % (start + 1, end, total, number, pages), navigation]
+    for record in records[start:end]:
         parts.append('<div class="entry"><div class="meta">%s &middot; %s %s &middot; %s</div><div>%s</div></div>' % (
             escape(record.get("ts")), badge(record.get("type") or record.get("kind") or "event"),
             escape(record.get("member")), task_link(record.get("task")) if record.get("task") else "no task",
             escape(record.get("text"))))
-    return "".join(parts)
+    return 200, "".join(parts) + navigation
 
 
 def render(reader, path, query, refresh):
@@ -360,12 +405,18 @@ def render(reader, path, query, refresh):
             core.validate_id(identifier)
             detail = reader.task(identifier)
         except core.BoardError as error:
-            return 404, page("Unknown task", "<h2>Unknown task</h2><p>%s</p>" % escape(error), 0, "/")
+            body = "<h2>Unknown task</h2><p>%s</p>" % escape(error)
+            return 404, page("Unknown task", body + snapshot_guidance(reader), 0, "/")
         return 200, page(detail["id"], task_section(reader, detail), refresh, "/")
     if path == "/sessions":
         return 200, page("Sessions", sessions_section(reader, (query.get("run") or [""])[0]), refresh, "/sessions")
     if path == "/activity":
-        return 200, page("Activity", activity_section(reader), refresh, "/activity")
+        value = (query.get("page") or ["1"])[0]
+        if not value.isascii() or not value.isdecimal() or len(value) > 18 or int(value) < 1:
+            return 400, page("Invalid page", "<h2>Invalid page</h2><p>Use a positive integer of at most "
+                             "18 digits for page.</p>", 0, "/activity")
+        status, body = activity_section(reader, int(value))
+        return status, page("Activity", body, refresh if status == 200 else 0, "/activity")
     return 404, page("Not found", "<h2>Not found</h2><p>Try the overview.</p>", 0, "/")
 
 
@@ -403,7 +454,11 @@ def loopback_family(host):
         raise core.BoardError("Cannot resolve --host %s: %s" % (host, error))
     for info in infos:
         address = info[4][0].split("%")[0]
-        if not ipaddress.ip_address(address).is_loopback:
+        parsed = ipaddress.ip_address(address)
+        if isinstance(parsed, ipaddress.IPv6Address) and parsed.ipv4_mapped is not None:
+            raise core.BoardError("IPv4-mapped IPv6 addresses are not supported by agentlane ui; "
+                                  "use 127.0.0.1, ::1 or localhost.")
+        if not parsed.is_loopback:
             raise core.BoardError(
                 "agentlane ui has no authentication and binds loopback only. --host %s resolves to %s; "
                 "use 127.0.0.1, ::1 or localhost." % (host, address))

@@ -4,6 +4,8 @@ import io
 import json
 import os
 from pathlib import Path
+import re
+import socket
 import tempfile
 import threading
 import types
@@ -149,12 +151,76 @@ class UITests(TestCase):
     def test_missing_and_empty_boards_are_handled(self):
         status, body = self.get("/")
         self.assertEqual(status, 200)
-        self.assertIn("No tasks", body)
+        self.assertIn("Board checkout missing", body)
+        self.assertIn(ui.escape(str(self.board_dir)), body)
+        self.assertNotIn("No tasks", body)
         self.assertEqual(200, self.get("/activity")[0])
         self.assertEqual(200, self.get("/sessions")[0])
+        self.board_dir.mkdir()
+        for path in ("/", "/activity"):
+            body = self.get(path)[1]
+            self.assertIn("No tasks directory", body)
+            self.assertIn("--board-dir", body)
         for name in ("tasks", "claims", "notes", "events"):
             (self.board_dir / name).mkdir(parents=True)
         self.assertIn("No tasks", self.get("/")[1])
+        self.assertNotIn("checkout missing", self.get("/")[1])
+        self.assertIn("No notes or events", self.get("/activity")[1])
+
+    def test_unknown_task_has_snapshot_refresh_guidance(self):
+        self.seed()
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            self.get("/task?id=AL-404")
+        with caught.exception as response:
+            self.assertEqual(response.code, 404)
+            body = response.read().decode("utf-8")
+        for expected in ("Unknown task", "snapshot", "agentlane status", "reload",
+                         ui.escape(str(self.board_dir))):
+            self.assertIn(expected, body)
+
+    def test_activity_paginates_all_events_and_notes(self):
+        self.seed()
+        records = [{"id": "%032x" % n, "ts": iso(n - 1000), "member": "alice",
+                    "type": "note", "kind": "finding", "text": "ENTRY_%04d_END" % n}
+                   for n in range(605)]
+        events = self.board_dir / "events/alice.jsonl"
+        events.write_text("".join(json.dumps(r) + "\n" for r in records[:500]), encoding="utf-8")
+        # Overlapping notes also have corresponding events and must not be counted twice.
+        notes = self.board_dir / "notes/alice.jsonl"
+        notes.write_text("".join(json.dumps(r) + "\n" for r in records[490:]), encoding="utf-8")
+        seen = []
+        for number, count in ((1, 300), (2, 300), (3, 5)):
+            status, body = self.get("/activity?page=%d" % number)
+            self.assertEqual(status, 200)
+            entries = re.findall(r"ENTRY_(\d+)_END", body)
+            self.assertEqual(len(entries), count)
+            self.assertIn("of 605", body)
+            self.assertIn("Page %d of 3" % number, body)
+            if number < 3:
+                self.assertIn('href="/activity?page=%d"' % (number + 1), body)
+                self.assertIn("Older", body)
+            else:
+                self.assertNotIn("Older", body)
+            if number > 1:
+                self.assertIn('href="/activity?page=%d"' % (number - 1), body)
+                self.assertIn("Newer", body)
+            seen.extend(int(n) for n in entries)
+        self.assertEqual(seen, list(reversed(range(605))))
+
+    def test_activity_rejects_invalid_pages_and_links_back_from_missing_page(self):
+        self.seed()
+        for value in ("0", "-1", "abc", "1.5", "9" * 5000):
+            with self.subTest(page=value):
+                with self.assertRaises(urllib.error.HTTPError) as caught:
+                    self.get("/activity?page=" + value)
+                with caught.exception as response:
+                    self.assertEqual(response.code, 400)
+                    self.assertIn("positive integer", response.read().decode("utf-8"))
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            self.get("/activity?page=2")
+        with caught.exception as response:
+            self.assertEqual(response.code, 404)
+            self.assertIn('href="/activity"', response.read().decode("utf-8"))
 
     def test_activity_merges_notes_claims_approvals_and_landings(self):
         self.seed()
@@ -177,6 +243,19 @@ class UITests(TestCase):
         self.assertIn("live output line", body)
         self.assertIn("AL-1", body)
         self.assertIn(OLD_RUN[:12], body)
+
+    def test_ui_reads_receipts_without_worker_lock_or_liveness_probe(self):
+        self.seed()
+        receipt(self.registry / RUN_ID, RUN_ID, self.common,
+                status="running", finished=None, exit_code=None)
+        with patch.object(worker, "clone_lock", side_effect=AssertionError("UI took worker lock")), \
+                patch.object(worker, "read_marker", side_effect=AssertionError("UI probed clone")):
+            self.assertEqual(self.reader().runs()[0]["status"], "running")
+            for path in ("/sessions", "/task?id=AL-1"):
+                status, body = self.get(path)
+                self.assertEqual(status, 200)
+                self.assertIn("running (unverified)", body)
+        self.assertFalse((self.common / "agentlane-worker.lock").exists())
 
     def test_large_log_is_tailed_not_loaded(self):
         self.seed()
@@ -208,6 +287,21 @@ class UITests(TestCase):
             self.assertNotIn("SECRET_FILE_CONTENT", body)
             self.assertIn("outside this run&#x27;s receipt directory", body)
 
+    def test_log_checks_and_reads_the_resolved_contained_path(self):
+        self.seed()
+        directory = self.registry / OLD_RUN
+        (directory / "subdir").mkdir()
+        original = str(directory / "subdir" / ".." / "stdout.log")
+        run = receipt(directory, OLD_RUN, self.common, stdout_log=original)
+        resolved = os.path.realpath(original)
+        self.assertNotEqual(original, resolved)
+        with patch.object(ui.os.path, "isfile", wraps=os.path.isfile) as isfile, \
+                patch.object(ui, "tail", wraps=ui.tail) as read_tail:
+            body = ui.log_block(self.reader(), run, "stdout")
+        self.assertIn("ready", body)
+        isfile.assert_called_once_with(resolved)
+        read_tail.assert_called_once_with(resolved)
+
     def test_unreadable_receipt_does_not_break_the_sessions_view(self):
         self.seed()
         broken = self.registry / ("c" * 32)
@@ -228,6 +322,16 @@ class UITests(TestCase):
                 self.assertEqual(host, "::1", error)
                 continue
             server.server_close()
+
+    def test_ipv4_mapped_ipv6_is_rejected_before_binding(self):
+        for address in ("::ffff:127.0.0.1", "::ffff:192.0.2.10"):
+            infos = [(socket.AF_INET6, socket.SOCK_STREAM, 6, "", (address, 0, 0, 0))]
+            with self.subTest(address=address), \
+                    patch.object(ui.socket, "getaddrinfo", return_value=infos), \
+                    patch.object(ui.ThreadingHTTPServer, "server_bind") as bind:
+                with self.assertRaisesRegex(core.BoardError, "IPv4-mapped IPv6"):
+                    ui.make_server(self.reader(), address, 0, 5)
+                bind.assert_not_called()
 
     def test_server_serves_no_mutating_methods(self):
         self.seed()
