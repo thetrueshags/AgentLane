@@ -13,16 +13,23 @@ Audited 2026-09-19 against upstream main
 `https://github.com/thetrueshags/AgentLane.git`. This is the source repository,
 not automatically the remote of a project using AgentLane.
 
-| Evidence | What actually exists |
+| Evidence | Behavior at audited revisions |
 | --- | --- |
 | [README](../README.md), [architecture](architecture.md), `agentlane/board.py` | CLI/MCP board on configured Git remote; transactional board writes; no central HTTP service on main. |
 | `.harness/config.json`, `Repo`, `Board.sync/txn` | Defaults: `origin`, `main`, `board`; direct landing; review opt-in false; 45-minute TTL and 15-minute inactivity release. Project configuration can override them. |
 | Fresh source `python -m agentlane --help` and `--json doctor` | No `ui` command; remote main reachable, board/member/hook absent. These are expected for source maintenance, not instructions to initialize AgentLane's own board. |
 | [workers](workers.md), `agentlane/worker.py` | Local supervisor receipts/logs under coordinator Git common directory; run name does not join a board; task association is unverified. |
 | `feature/localhost-ui` at `a2b0f2ace6537647b4fda5c1fd90a8d74bf7fcec` | Separate unmerged candidate: `agentlane/ui.py`, `docs/ui.md`, `tests/test_ui.py`; loopback GET-only dashboard, automatic page reload, no Git fetch. |
-| Retained independent review of that exact UI candidate | Round-two containment fix accepted; remaining concerns include concurrent mixed board reads, worker-lock probes, and log path check/read race. Historical review is not validation of a shared service. |
+| Retained independent review of that exact UI candidate | Round-two containment fix accepted; concerns at that baseline included concurrent mixed board reads, worker-lock probes, and log path check/read race. Historical review is not validation of a shared service. |
 
-The UI candidate is 787 added lines over audited main. Its renderer and escaping
+The localhost prerequisite is tracked in [PR #11](https://github.com/thetrueshags/AgentLane/pull/11).
+The reviewed baseline `a2b0f2ace6537647b4fda5c1fd90a8d74bf7fcec` was republished as
+`5ef6e43aaad8a18f00afa7955031e17a8f205ecc` with corrected attribution metadata only;
+the source tree is identical. As of 2026-09-20, the feature head is
+`688f4a82f5dc7c4ae3ebad641cb245018cd12da6`; its subsequent changes are outside this
+historical baseline audit.
+
+The audited UI baseline is 787 added lines over audited main. Its renderer and escaping
 tests are reusable after independent upstream review; its HTTP/session/log boundary
 is not a shared-service foundation to expose unchanged. Do not broaden its bind or
 proxy its log routes onto a shared address. Local-dashboard residual maintenance
@@ -91,8 +98,8 @@ a public package release or a shared UI command already exists.
    connected. Browser access requires no local clone or local filesystem access.
 
 No existing service descriptor or runtime registration mechanism ships on audited
-main. Engineering must document exact new commands/options with the implementing
-slice and test them from a clone containing only tracked project files.
+main. Implementation should document exact new commands/options with the corresponding
+slice and validate them from a clone containing only tracked project files.
 
 ## Smallest useful service
 
@@ -103,7 +110,7 @@ separate task database, agent execution API, or multi-project tenancy in this re
 Use simple server-rendered pages/forms and bounded polling; no frontend build chain
 is necessary. Keep dependency additions explicit and reviewed if ingress needs them.
 
-First engineering PR: a private fetcher producing a validated, immutable board
+Suggested first PR: a private fetcher producing a validated, immutable board
 snapshot with revision/time/error metadata and tests. It exposes no network server.
 The first useful interactive milestone combines that reader with authenticated
 task/activity pages and one operation: append a note. Follow it with shared worker
@@ -235,9 +242,9 @@ to the board. Git remains authoritative for tasks; status records are observatio
 
 ## Bounded delivery and independent QA
 
-Each row is an ordinary source PR with a named implementation owner and a different
-delivery reviewer. Keep each at or below 800 changed lines including tests/docs;
-split a row further before coding if needed. No self-approval or direct main push.
+These rows suggest focused PR boundaries, not additional contribution rules.
+Follow [CONTRIBUTING.md](../CONTRIBUTING.md) for scope, validation and review;
+split a slice further when that makes the change easier to review.
 
 | Slice / dependency | Deliverable and independent acceptance |
 | --- | --- |
@@ -247,7 +254,7 @@ split a row further before coding if needed. No self-approval or direct main pus
 | S3b: S2 + S3a | Note form, roles, CSRF and outcome receipts. Reader denied; planner accepted; cross-origin/missing-token requests denied; revocation effective; unknown push reconciles; no gate/approval mutation. First interactive milestone. |
 | S4a: S2 | Principal/member/host/clone registration and allowlisted status ingest. Collision, wrong project, unregistered host, replay and revoked publisher refused; no private payload accepted. |
 | S4b: S4a | Optional local publisher and workers page. Real harmless foreground worker exits/fails; hard-killed supervisor yields unknown; report loss ages offline; claim heartbeat never substitutes for process health. |
-| S5: S3b + S4b | Runbook and approved existing-host pilot. Independent clean-clone and second-machine browser exercise; service/remote/reporter outage and restart; operator ownership and private-data boundary checked. |
+| S5: S3b + S4b | Runbook and existing-host pilot. Independent clean-clone and second-machine browser exercise; service/remote/reporter outage and restart; operator ownership and private-data boundary checked. |
 | S6: after S5 | Optional task creation, using same transaction/audit controls. Open task visible in both clients, no claim or branch switch. Defer further controls until evidence requires them. |
 
 QA records exact candidate/base/runtime, fixture remote/refs, browser identities,
@@ -272,16 +279,15 @@ machine, ingress ownership, branch permissions and protected local storage first
 An existing managed internal server/VM is the fallback if the workstation sleeps or
 cannot accept authorized clients; use the same single-process design and runbook.
 
-If neither has authenticated ingress, continue loopback-only synthetic development
-and leave central pilot blocked on an operator-selected auth/host arrangement.
-Do not tunnel/expose the current unauthenticated dashboard. No paid hosting, new
-install, credential acquisition or deployment is authorized by this plan.
+If neither has authenticated ingress, use loopback-only synthetic development
+until an operator selects and configures a suitable host and authentication setup.
+Do not tunnel/expose the current unauthenticated dashboard. Existing resources
+should suffice for a pilot; paid hosting is not a prerequisite.
 
-Unknown host decisions: actual machine, operator, internal DNS/TLS endpoint, existing
+Unresolved deployment inputs: machine, operator, internal DNS/TLS endpoint, existing
 identity proxy, permitted client network, service account/branch permissions, backup
-and retention policy. Resolve from an operator inventory before requesting a specific
-deployment decision; do not ask the owner to rediscover facts available in the repo.
-No uptime or installed-ingress claim is made from this source audit.
+and retention policy. Operators should inventory these inputs before selecting a
+deployment target. This source audit does not establish host uptime or ingress availability.
 
 Runbook must give version-pinned startup/config checks, service status and health
 interpretation, safe stop/restart, log rotation, descriptor/mapping/audit backup and
