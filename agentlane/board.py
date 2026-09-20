@@ -1707,6 +1707,12 @@ def build_parser():
     s.set_defaults(fn=None)
     s = sub.add_parser("mcp", help="serve the shared agent tools over stdio")
     s.set_defaults(fn=None)
+    from agentlane.ui import DEFAULT_PORT, DEFAULT_REFRESH
+    s = sub.add_parser("ui", help="serve a read-only localhost dashboard of tasks, notes and worker runs")
+    s.add_argument("--host", default="127.0.0.1", help="loopback address to bind; anything else is refused")
+    s.add_argument("--port", type=int, default=DEFAULT_PORT, help="TCP port; 0 picks a free one")
+    s.add_argument("--refresh", type=int, default=DEFAULT_REFRESH, help="page refresh seconds; 0 disables")
+    s.set_defaults(fn=None)
     s = sub.add_parser("list", help="list tasks, ownership and paths")
     s.add_argument("--available", action="store_true", help="open tasks without live path conflicts")
     s.add_argument("--mine", action="store_true", help="tasks owned by this worker")
@@ -1866,6 +1872,10 @@ def main(argv=None):
             from agentlane.mcp import main as mcp_main
             mcp_main()
             return 0
+        if args.cmd == "ui":
+            # Read-only and long-running: it never takes the checkout lock other commands need.
+            from agentlane.ui import serve
+            return serve(args, Repo())
         if getattr(args, "paths", None):
             if args.globs:
                 raise BoardError("Use either --paths or --globs, not both.")

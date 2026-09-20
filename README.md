@@ -60,6 +60,10 @@ branch, timestamps, stale state and notes. For incomplete setup, run `agentlane 
 diagnoses without making changes. Install the local pre-push guardrail with `agentlane install`;
 `done` enforces its own checks regardless.
 
+`agentlane ui` serves a read-only dashboard on `http://127.0.0.1:8787/` so you can follow tasks,
+claims, notes, approvals and worker sessions in a browser instead of reading logs by hand. It
+binds loopback only and changes nothing. See the [localhost dashboard](docs/ui.md).
+
 Your agent can handle these steps. Tell it: "Read AGENTS.md, inspect the board, and help me choose
 a task." See the [three-worker walkthrough](docs/example.md).
 
@@ -155,6 +159,7 @@ Source contributors use ordinary branches and PRs without board membership.
 
 - [Contribution guide](CONTRIBUTING.md)
 - [Architecture and recovery](docs/architecture.md)
+- [Localhost dashboard](docs/ui.md)
 - [Three-worker example](docs/example.md)
 - [Changelog](CHANGELOG.md) and [release instructions](docs/releasing.md)
 - [Community guidelines](CODE_OF_CONDUCT.md) and [private security reporting](SECURITY.md)

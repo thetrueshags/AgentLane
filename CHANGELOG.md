@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `agentlane ui`: a read-only localhost dashboard with overview, task detail, worker sessions and
+  a merged activity timeline. Loopback-only bind, escaped agent-authored text, bounded log tails.
 - Opt-in independent review for direct landing, governed by exact target main policy; default off.
 - Structured CLI/MCP approvals and withdrawals tied to commit, main base and live lease, with
   durable implementation provenance and explicit incompatibility with PR mode.
