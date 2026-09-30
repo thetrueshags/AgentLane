@@ -31,6 +31,12 @@ TOOLS = [
          "title": {"type": "string"}, "description": {"type": "string"},
          "globs": {"type": "array", "items": {"type": "string"}},
          "kind": {"type": "string", "enum": ["code", "docs", "test", "research", "design", "ops", "other"]}}}},
+    {"name": "board_retire", "description": "Retire an unclaimed backlog task with a reason; preserve history without landing code.",
+     "inputSchema": {"type": "object", "required": ["task_id", "reason"], "properties": {
+         "task_id": {"type": "string"}, "reason": {"type": "string"}, "superseded_by": {"type": "string"}}}},
+    {"name": "board_unretire", "description": "Unretire an unclaimed backlog task with a reason; preserve history without landing code.",
+     "inputSchema": {"type": "object", "required": ["task_id", "reason"], "properties": {
+         "task_id": {"type": "string"}, "reason": {"type": "string"}}}},
     {"name": "board_sync_reviews",
      "description": "Check GitHub PR outcomes: mark tasks done after a verified merge into the main branch, or reopen tasks whose PRs closed without merging. Requires gh authentication.",
      "inputSchema": {"type": "object", "properties": {}}},
@@ -130,6 +136,11 @@ def call(name, a):
         if a.get("globs"):
             argv += ["--globs", ",".join(a["globs"])]
         return board(argv)
+    if name in ("board_retire", "board_unretire"):
+        argv = [name.removeprefix("board_"), "--reason=" + a["reason"]]
+        if "superseded_by" in a:
+            argv.append("--superseded-by=" + a["superseded_by"])
+        return board(argv + ["--", a["task_id"]])
     if name == "board_sync_reviews":
         return board(["sync-reviews"])
     if name == "board_status":

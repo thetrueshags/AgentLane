@@ -107,6 +107,23 @@ class UITests(TestCase):
         with urllib.request.urlopen(url, timeout=30) as response:
             return response.status, response.read().decode("utf-8")
 
+    def test_retired_task_remains_visible_with_escaped_audit(self):
+        write(self.board_dir / "tasks/AL-3.json", {
+            "id": "AL-3", "title": "Obsolete plan", "status": "retired",
+            "retirement_history": [{"action": "retire", "actor": "alice", "timestamp": iso(-5),
+                                    "reason": HOSTILE, "superseded_by": "AL-4"}]})
+        status, overview = self.get("/")
+        self.assertEqual(status, 200)
+        self.assertIn("retired", overview)
+        self.assertIn("AL-3", overview)
+        status, detail = self.get("/task?id=AL-3")
+        self.assertEqual(status, 200)
+        self.assertIn("Retirement history", detail)
+        self.assertIn("superseded by AL-4", detail)
+        self.assertIn("alice", detail)
+        self.assertNotIn("<script", detail)
+        self.assertIn("&lt;script&gt;", detail)
+
     def test_overview_groups_tasks_and_marks_stale_claims(self):
         self.seed()
         status, body = self.get("/")

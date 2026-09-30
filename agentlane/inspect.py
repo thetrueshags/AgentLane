@@ -62,6 +62,10 @@ def cmd_show(args, repo):
                          "withdrawn" if "withdrawal" in approval else "recorded", approval["reviewer"], approval["timestamp"]))
             lines.append("    Commit: %s; base: %s" % (approval["commit"], approval["base"]))
             lines.append("    Evidence: " + approval["evidence"])
+    from agentlane.retirement import history_lines
+    if t.get("retirement_history"):
+        lines.append("Retirement history:")
+        lines.extend("  " + line for line in history_lines(t))
     lines.append("Notes:")
     lines.extend("  %s %s [%s] %s" % (n["ts"], n["member"], n["kind"], n["text"]) for n in t["notes"])
     core.out(args, "\n".join(lines), t)
