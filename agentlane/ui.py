@@ -21,7 +21,7 @@ LOG_TAIL_BYTES = 65536
 ACTIVITY_LIMIT = 300
 DEFAULT_PORT = 8787
 DEFAULT_REFRESH = 10
-STATES = ("claimed", "blocked", "review", "open", "done")
+STATES = ("claimed", "blocked", "review", "open", "done", "retired")
 NAV = (("/", "Overview"), ("/activity", "Activity"), ("/sessions", "Sessions"))
 STYLE = """
 :root{color-scheme:light dark}
@@ -289,6 +289,9 @@ def task_section(reader, task):
             ("Paths", escape(", ".join(task.get("globs", [])) or "not selected")),
             ("Created", escape(task.get("created"))),
             ("Updated", escape(task.get("updated")))]
+    from agentlane.retirement import history_lines
+    if task.get("retirement_history"):
+        head.append(("Retirement history", "<br>".join(escape(line) for line in history_lines(task))))
     if task.get("pr"):
         head.append(("PR", escape(task["pr"])))
     if task.get("blocker"):

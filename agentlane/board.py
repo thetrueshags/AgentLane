@@ -111,11 +111,13 @@ def validate_record(kind, record):
     if not isinstance(record, dict) or not all(isinstance(record.get(k), str) and record[k] for k in required):
         raise BoardError("Malformed %s record: required fields are %s. Inspect board history." % (kind, ", ".join(required)))
     validate_id(record.get("id", record.get("name")))
-    if kind == "tasks" and record["status"] not in ("open", "claimed", "blocked", "review", "done"):
+    if kind == "tasks" and record["status"] not in ("open", "claimed", "blocked", "review", "done", "retired"):
         raise BoardError("Unknown task state %r" % record["status"])
     if kind == "tasks":
         from agentlane.review import validate_task_review
         validate_task_review(record)
+        from agentlane.retirement import validate_history
+        validate_history(record)
     if kind in ("tasks", "claims"):
         paths = record.get("globs", [])
         if not isinstance(paths, list) or (kind == "claims" and not paths):
@@ -485,6 +487,9 @@ class Board:
                 if any_overlap(c["globs"], other["globs"]):
                     raise BoardError("Board contains overlapping claims %s and %s; resolve ownership explicitly" % (c["id"], other["id"]))
         for t in tasks.values():
+            for entry in t.get("retirement_history", []):
+                if entry.get("superseded_by") and entry["superseded_by"] not in tasks:
+                    raise BoardError("Retirement references a missing replacement task")
             if t["status"] == "claimed" and not any(c["id"] == t["id"] for c in claims):
                 raise BoardError("Task %s is claimed but its claim is missing; inspect board history" % t["id"])
         for record in self.all_events() + self.all_notes():
@@ -1702,6 +1707,8 @@ def build_parser():
     sub = p.add_subparsers(dest="cmd", required=True)
     from agentlane.worker import add_parser as add_worker_parser
     add_worker_parser(sub)
+    from agentlane.retirement import add_parsers as add_retirement_parsers
+    add_retirement_parsers(sub)
 
     s = sub.add_parser("doctor", help="diagnose setup without changing files or Git refs")
     s.set_defaults(fn=None)

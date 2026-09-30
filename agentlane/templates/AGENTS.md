@@ -43,6 +43,10 @@ All supported agents use these same rules, through the CLI or `board_*` MCP tool
 
 ## Recovery and shared files
 
+- Retire obsolete open, unclaimed work with `agentlane retire TASK_ID --reason "why"`
+  (optionally `--superseded-by OTHER_ID`). This preserves the ID and history without landing code.
+  Restore it with `agentlane unretire TASK_ID --reason "why"`; inspect either state with `show`.
+
 - Stale claims can be re-taken after configured TTL or inactivity expiry. Their branches retain
   work. `agentlane release --force TASK_ID` only recovers a stale claim; it cannot steal a live one.
 - Release work you cannot continue. Handoff requires pushing the branch successfully first.
