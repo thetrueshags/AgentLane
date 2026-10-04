@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Improve the local owner dashboard with responsive navigation, snapshot guidance, linked counts,
+  task filters, blockers and full approval history. Correct future expiry wording and return 404
+  for missing selected worker runs without showing unrelated logs.
 - `agentlane ui`: a read-only localhost dashboard with overview, task detail, worker sessions and
   a merged activity timeline. Loopback-only bind, escaped agent-authored text, bounded log tails.
 - Opt-in independent review for direct landing, governed by exact target main policy; default off.

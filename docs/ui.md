@@ -17,17 +17,31 @@ Ctrl-C. Open the printed URL in a browser.
 
 - **Overview** (`/`): every task grouped by state, with owner and agent, the age of its last
   update, declared paths, and its claim's health: `stale`, time left on the lease, and a warning
-  when a live claim has stopped heartbeating.
+  when a live claim has stopped heartbeating. Summary links count active (non-stale) claims,
+  blocked, review and open tasks across the snapshot. Blocked tasks show their blocker; approval
+  history links show recorded and withdrawn counts without asserting eligibility.
+  The labeled GET form searches task ID/title without regard to case and filters by known state,
+  exact owner name (also case-insensitive), and active claims. Matching/total counts describe
+  the snapshot; submitted values stay in the form and URL. **Clear all** includes done and
+  retired work. Unknown state or claim filters return 400 with escaped values and guidance.
+  Declared paths use a native, initially collapsed disclosure showing their count; click its
+  summary or focus it and press Enter/Space to inspect the full escaped list.
 - **Task detail** (`/task?id=TASK_ID`): description, declared paths, branch, landing history, the
   full claim including lease, base, expiry, heartbeat and extensions used, the note timeline in
   order, the approval records with reviewer, commit, base and evidence, and the worker runs whose
-  receipts name that task. An unknown task returns 404 with instructions to refresh the local
+  receipts name that task. Section links and a return-to-overview link help navigate the record.
+  Future expiry reads `in ...`; past expiry reads `expired ... ago`. Approval history preserves
+  full candidate/base SHAs, evidence and withdrawal details. Eligibility is rechecked at landing;
+  a recorded approval alone does not establish a current valid review or readiness to land.
+  An unknown task returns 404 with instructions to refresh the local
   board snapshot and reload.
 - **Sessions** (`/sessions`): every local worker run newest first with status, task, start,
   duration, exit code and the literal argv, plus a bounded tail of stdout and stderr for any run
   whose receipt says it is running. `/sessions?run=RUN_ID` tails a specific run. Status comes
   directly from receipts: `running (unverified)` does not confirm a live process, and a crashed
   supervisor may leave that status behind.
+  An exited process, including exit code 0, does not establish task completion or gate success.
+  A missing selected run returns 404 and a Sessions link, with no substitute output from other runs.
 - **Activity** (`/activity`): claims, notes, approvals, landings and every other board event from
   all workers merged into one reverse-chronological timeline. This is the page that makes a
   multi-agent run followable. Each page shows up to 300 entries, the total count and page number,
@@ -40,6 +54,13 @@ the resolved path. An existing empty `tasks/` directory shows an empty snapshot.
 not verify Git branch identity; `--board-dir` must point to the intended board checkout.
 
 Pages refresh themselves with a `<meta http-equiv="refresh">` tag; `--refresh 0` turns that off.
+Every successful page names its local snapshot and explains that reloading does not fetch remote
+changes. Refresh it with `agentlane status` in the project clone, then reload. No last-fetch time
+is inferred. Board reads may mix records during concurrent changes.
+
+The responsive shell uses local styles and system fonts. It includes a skip link, visible
+keyboard focus, current-page navigation and labeled, keyboard-focusable table scroll regions.
+At narrow widths, dense tables scroll within their region while long text wraps inside cells.
 
 ## What it will not do
 
