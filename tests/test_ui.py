@@ -12,6 +12,7 @@ import types
 import unittest
 from unittest.mock import patch
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from agentlane import board as core, ui, worker
@@ -126,6 +127,10 @@ class UITests(TestCase):
 
     def test_overview_groups_tasks_and_marks_stale_claims(self):
         self.seed()
+        path = self.board_dir / "tasks/AL-1.json"
+        task = json.loads(path.read_text())
+        task["globs"].append("src/" + "long-path/" * 40 + "**")
+        write(path, task)
         status, body = self.get("/")
         self.assertEqual(status, 200)
         self.assertIn("claimed", body)
@@ -134,6 +139,146 @@ class UITests(TestCase):
         self.assertIn("alice", body)
         self.assertIn("stale", body.lower())
         self.assertIn('http-equiv="refresh"', body)
+        self.assertIn('<details class="paths"><summary>2 declared paths</summary>', body)
+        self.assertNotRegex(body, r"<details[^>]*\bopen\b")
+        for glob in task["globs"]:
+            self.assertIn("<li>%s</li>" % ui.escape(glob), body)
+        self.assertIn("&lt;script&gt;", ui.path_details({"globs": [HOSTILE]}))
+        self.assertNotIn("<script", ui.path_details({"globs": [HOSTILE]}))
+
+    def test_relative_timestamps_distinguish_future_past_and_unknown(self):
+        at = core.parse_iso("2026-10-05T12:00:00+00:00")
+        self.assertEqual(ui.ago(core.iso(at + core.dt.timedelta(minutes=20)), at), "in 20m 00s")
+        self.assertEqual(ui.ago(core.iso(at - core.dt.timedelta(minutes=20)), at), "20m 00s ago")
+        self.assertEqual(ui.expiry(core.iso(at - core.dt.timedelta(minutes=20)), at), "expired 20m 00s ago")
+        for value in (None, "", "invalid"):
+            self.assertEqual(ui.ago(value, at), "unknown")
+            self.assertEqual(ui.expiry(value, at), "unknown")
+        self.seed()
+        path = self.board_dir / "claims/AL-1.json"
+        claim = json.loads(path.read_text())
+        claim.update(expires=core.iso(at + core.dt.timedelta(minutes=20)),
+                     last_heartbeat=core.iso(at - core.dt.timedelta(minutes=1)))
+        write(path, claim)
+        with patch.object(core, "now", return_value=at):
+            body = self.get("/task?id=AL-1")[1]
+        self.assertIn("(in 20m 00s)", body)
+        self.assertNotIn("20m 00s ago", body)
+
+    def test_missing_selected_run_is_404_without_unrelated_log_output(self):
+        self.seed()
+        receipt(self.registry / RUN_ID, RUN_ID, self.common, status="running",
+                finished=None, exit_code=None)
+        (self.registry / RUN_ID / "stdout.log").write_text("UNRELATED_OUTPUT")
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            self.get("/sessions?run=missing-run")
+        self.assertEqual(caught.exception.code, 404)
+        body = caught.exception.read().decode("utf-8")
+        self.assertIn("Run not found", body)
+        self.assertIn('href="/sessions"', body)
+        self.assertNotIn("UNRELATED_OUTPUT", body)
+        self.assertNotIn("Output of", body)
+        self.assertIn("UNRELATED_OUTPUT", self.get("/sessions")[1])
+        self.assertNotIn("UNRELATED_OUTPUT", self.get("/sessions?run=" + OLD_RUN)[1])
+
+    def test_overview_filters_match_id_title_state_and_owner_together(self):
+        self.seed()
+        for values, expected in (({"q": "hArDeN", "state": "claimed", "owner": "alice"}, "AL-1"),
+                                 ({"q": "al-2"}, "AL-2")):
+            body = self.get("/?" + urllib.parse.urlencode(values))[1]
+            self.assertIn("1 matching of 2 tasks", body)
+            self.assertIn('href="/task?id=%s"' % expected, body)
+            self.assertNotIn('href="/task?id=%s"' % ("AL-2" if expected == "AL-1" else "AL-1"), body)
+        body = self.get("/?q=Harden&owner=bob")[1]
+        self.assertIn("0 matching of 2 tasks", body)
+        self.assertIn("No tasks match", body)
+        self.assertIn('href="/"', body)
+        self.assertIn("2 matching of 2 tasks", self.get("/")[1])
+
+    def test_filters_preserve_escaped_values_and_reject_unknown_states(self):
+        self.seed()
+        body = self.get("/?" + urllib.parse.urlencode({"q": HOSTILE, "owner": HOSTILE}))[1]
+        self.assertIn('value="%s"' % ui.escape(HOSTILE), body)
+        self.assertNotIn("<script", body)
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            self.get("/?" + urllib.parse.urlencode({"state": HOSTILE}))
+        self.assertEqual(caught.exception.code, 400)
+        body = caught.exception.read().decode("utf-8")
+        self.assertIn("Unknown state", body)
+        self.assertIn(ui.escape(HOSTILE), body)
+        self.assertNotIn("<script", body)
+
+    def test_summary_uses_task_and_claim_records_not_receipt_exit_or_notes(self):
+        self.seed()
+        write(self.board_dir / "tasks/AL-3.json", {
+            "id": "AL-3", "title": "Blocked work", "status": "blocked", "blocker": HOSTILE})
+        write(self.board_dir / "tasks/AL-4.json", {"id": "AL-4", "title": "Review", "status": "review"})
+        body = self.get("/")[1]
+        for label, number in (("Active claims", 0), ("Blocked tasks", 1), ("Review tasks", 1), ("Open tasks", 1)):
+            self.assertIn('<strong>%d</strong><span>%s</span>' % (number, label), body)
+        self.assertIn('href="/?claim=active"', body)
+        self.assertIn('href="/?state=blocked"', body)
+        self.assertIn("Blocker: " + ui.escape(HOSTILE), body)
+        self.assertIn("1 recorded approval", body)
+        self.assertIn("No approvals recorded", body)
+        self.assertIn("0 matching of 4 tasks", self.get("/?claim=active")[1])
+        path = self.board_dir / "claims/AL-1.json"
+        claim = json.loads(path.read_text())
+        claim.update(expires=iso(20), last_heartbeat=iso(-1))
+        write(path, claim)
+        body = self.get("/?claim=active")[1]
+        self.assertIn('<strong>1</strong><span>Active claims</span>', body)
+        self.assertIn("1 matching of 4 tasks", body)
+        self.assertIn('href="/task?id=AL-1"', body)
+
+    def test_clearing_filters_includes_done_and_retired_and_empty_form_works(self):
+        self.seed()
+        for identifier, state in (("AL-3", "done"), ("AL-4", "retired")):
+            task = {"id": identifier, "title": state + " task", "status": state}
+            if state == "retired":
+                task["retirement_history"] = [{"action": "retire", "actor": "alice",
+                                               "timestamp": iso(-5), "reason": "Obsolete"}]
+            write(self.board_dir / ("tasks/%s.json" % identifier), task)
+        self.assertIn("1 matching of 4 tasks", self.get("/?state=done")[1])
+        body = self.get("/")[1]
+        self.assertIn("4 matching of 4 tasks", body)
+        for identifier in ("AL-1", "AL-2", "AL-3", "AL-4"):
+            self.assertIn('href="/task?id=%s"' % identifier, body)
+        for path in (self.board_dir / "tasks").glob("*.json"):
+            path.unlink()
+        body = self.get("/")[1]
+        self.assertIn("No tasks in the local board snapshot", body)
+        self.assertIn('aria-label="Filter tasks"', body)
+
+    def test_approval_history_is_full_and_honest_with_withdrawals(self):
+        self.seed()
+        path = self.board_dir / "tasks/AL-1.json"
+        task = json.loads(path.read_text())
+        task["approvals"][0]["withdrawal"] = {"reviewer": "bob", "timestamp": iso(-2)}
+        write(path, task)
+        overview = self.get("/")[1]
+        self.assertIn("1 withdrawn approval", overview)
+        body = self.get("/task?id=AL-1")[1]
+        for expected in ("eligibility is rechecked at landing", "Candidate", "d" * 40, "e" * 40,
+                         "withdrawn", ui.escape(HOSTILE), 'href="#claim"', 'href="#notes"',
+                         'href="#approvals"', 'href="#runs"', "Return to overview"):
+            self.assertIn(expected, body)
+        for unearned in ("ready to land", "current approval", "valid review"):
+            self.assertNotIn(unearned, body.lower())
+
+    def test_successful_pages_have_accessible_shell_and_snapshot_guidance(self):
+        self.seed()
+        for path, active in (("/", "/"), ("/task?id=AL-1", "/"),
+                             ("/activity", "/activity"), ("/sessions", "/sessions")):
+            body = self.get(path)[1]
+            self.assertIn('href="#main"', body)
+            self.assertIn('<main id="main"', body)
+            self.assertIn('href="%s" aria-current="page"' % active, body)
+            self.assertIn("local snapshot", body)
+            self.assertIn("Reloading this page does not fetch remote changes", body)
+            self.assertIn("agentlane status", body)
+            if path != "/activity":
+                self.assertIn('role="region"', body)
 
     def test_agent_authored_text_renders_inert_everywhere(self):
         self.seed()
