@@ -22,9 +22,16 @@ agentlane done AL-12
 ```
 
 Failures report the script, exit status and output tail. Gates must not commit, change branches
-or alter tracked files; doing so requires review and another attempt. Long gates can outlive
-claims and cannot land with expired ownership. Choose timing settings that accommodate your
-checks. Gates should never log credentials.
+or alter tracked files; doing so requires review and another attempt. During a long `gate` or
+`done`, an owner can run `agentlane heartbeat` from another process in the same clone. Default
+heartbeats use a separate disposable board worktree and lock; other checkout-mutating commands respect
+the checkout lock. An explicit `--board-dir` retains exclusive checkout locking and cannot
+be heartbeated concurrently in that clone.
+
+Heartbeats update activity only: they do not extend the absolute lease deadline or recover
+expired ownership. Long gates can still outlive claims and cannot land with expired ownership.
+Choose timing settings that accommodate your checks. No automatic heartbeat is started by
+gates or supervised workers. Gates should never log credentials.
 
 For another ecosystem, edit the script directly. No plugin framework or service is required.
 
