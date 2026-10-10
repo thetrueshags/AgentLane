@@ -161,13 +161,15 @@ def hook_path(repo):
 
 
 @contextlib.contextmanager
-def checkout_lock(repo):
+def checkout_lock(repo, lock_name="agentlane.lock"):
     """OS lock protects the disposable board worktree; process exit releases it."""
     key = os.path.realpath(repo.git_common)
+    if lock_name != "agentlane.lock":
+        key = os.path.join(key, lock_name)
     if os.environ.get("AGENTLANE_LOCK_HELD") == key:
         yield  # a hook invoked synchronously by this command
         return
-    with open(os.path.join(repo.git_common, "agentlane.lock"), "a+b") as f:
+    with open(os.path.join(repo.git_common, lock_name), "a+b") as f:
         f.seek(0, 2)
         if f.tell() == 0:
             f.write(b"0")
@@ -379,13 +381,14 @@ class Repo:
 class Board:
     """A checkout of the board branch with fetch / mutate / commit / push semantics."""
 
-    def __init__(self, repo, board_dir=None):
+    def __init__(self, repo, board_dir=None, worktree_name="board-wt"):
         self.repo = repo
         self.cfg = repo.cfg
         self.branch = self.cfg["board_branch"]
         self.remote = repo.remote
         self.external = board_dir is not None
-        self.dir = os.path.abspath(board_dir or os.path.join(repo.git_common, "board-wt"))
+        self.heartbeat = not self.external and worktree_name == "heartbeat-board-wt"
+        self.dir = os.path.abspath(board_dir or os.path.join(repo.git_common, worktree_name))
 
     def exists_on_remote(self):
         p = self.repo.git(["ls-remote", "--exit-code", "--heads", self.remote, self.branch], check=False)
@@ -415,7 +418,12 @@ class Board:
             return True
         git(["-c", "user.name=board", "-c", "user.email=board@agentlane.local",
              "commit", "-q", "-m", message], cwd=self.dir)
-        p = git(["push", "-q", self.remote, "HEAD:refs/heads/%s" % self.branch], cwd=self.dir, check=False)
+        if self.heartbeat:
+            # Hooks need the project config/identity, not the board-only tree.
+            head = git(["rev-parse", "HEAD"], cwd=self.dir).stdout.strip()
+            p = self.repo.git(["push", "-q", self.remote, head + ":refs/heads/" + self.branch], check=False)
+        else:
+            p = git(["push", "-q", self.remote, "HEAD:refs/heads/%s" % self.branch], cwd=self.dir, check=False)
         if p.returncode == 0:
             return True
         err = (p.stderr + p.stdout).lower()
@@ -959,7 +967,9 @@ def my_claim(board, repo, task_id=None):
 
 
 def cmd_heartbeat(args, repo):
-    board = Board(repo, args.board_dir)
+    # Keep heartbeat fetch/reset/commit separate from a gate's prepared landing.
+    # An explicit CI board checkout retains the ordinary exclusive lock.
+    board = Board(repo, args.board_dir, worktree_name="heartbeat-board-wt")
     me = repo.member
 
     def mutate(b):
@@ -1616,7 +1626,9 @@ def cmd_revert_failed(args, repo):
 
 def cmd_check_push(args, repo):
     """git pre-push hook body. Reads `<local ref> <local sha> <remote ref> <remote sha>` lines on stdin."""
-    lines = sys.stdin.read().split("\n")
+    lines = getattr(args, "push_lines", None)
+    if lines is None:
+        lines = sys.stdin.read().split("\n")
     main_ref = "refs/heads/%s" % repo.main
     board_ref = "refs/heads/%s" % repo.cfg["board_branch"]
     for line in lines:
@@ -1896,7 +1908,15 @@ def main(argv=None):
                 raise BoardError("Provide the task ID once.")
             args.task, args.text = args.text, args.message
         repo = Repo()
-        with checkout_lock(repo):
+        if args.cmd == "check-push":
+            args.push_lines = sys.stdin.read().split("\n")
+            updates = [line.split() for line in args.push_lines if line.strip()]
+            if updates and all(len(parts) == 4 and parts[2] == "refs/heads/" + repo.cfg["board_branch"] for parts in updates):
+                # Board-only hook checks neither read nor mutate the checkout.
+                args.fn(args, repo)
+                return 0
+        lock_name = "agentlane-heartbeat.lock" if args.cmd == "heartbeat" and not args.board_dir else "agentlane.lock"
+        with checkout_lock(repo, lock_name):
             args.fn(args, repo)
         return 0
     except (BoardError, OSError, ValueError) as e:
