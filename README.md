@@ -1,27 +1,86 @@
+<div align="center">
+
+<img src="docs/assets/agentlane-logo.png" alt="AgentLane logo" width="112" height="112">
+
 # AgentLane
 
-**Parallel coding agents. One repository. No collisions.**
+### Parallel coding agents. One repository. No collisions.
 
-**Git-native coordination for humans and coding agents working concurrently on one repository.**
+Give every agent a lane. Turn parallel work into a shared codebase.
 
-Each worker gets a lane: a task, an exclusive claim on the paths it needs, and an isolated branch.
-Git coordinates ownership and serializes completed work into the shared codebase. The board lives
-in the repository. No coordination server, database, hosted control plane or shared agent runtime
-is required.
+[![Checks](https://github.com/thetrueshags/AgentLane/actions/workflows/contributions.yml/badge.svg?branch=main)](https://github.com/thetrueshags/AgentLane/actions/workflows/contributions.yml)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-3776AB?style=flat-square)](pyproject.toml)
+[![MIT license](https://img.shields.io/badge/license-MIT-84CCFF?style=flat-square)](LICENSE)
+[![Beta](https://img.shields.io/badge/status-beta-F2CC60?style=flat-square)](CHANGELOG.md)
 
-[MIT license](LICENSE) | [Contribute](CONTRIBUTING.md) | [Issues](https://github.com/thetrueshags/AgentLane/issues/new/choose) | [Discussions](https://github.com/thetrueshags/AgentLane/discussions)
+[Get started](#get-started) · [See the difference](#see-the-difference) · [How it works](#how-it-works) · [Contribute](CONTRIBUTING.md)
 
-Use AgentLane for product development, maintenance, documentation, research, operations, or a
-hackathon. One person can direct several agents; a team can bring different tools. Each concurrent
-worker uses a separate clone and unique name. This coordinates cooperative workers; repository
-permissions remain your responsibility.
+**Codex · Claude Code · Cursor · Gemini CLI · VS Code / Copilot · OpenCode · Shell**
 
-## Install
+</div>
+
+---
+
+Running more agents should mean more progress. AgentLane gives humans and coding agents a
+shared task board, exclusive path claims, and isolated branches so they can work concurrently
+on one project. When a lane is ready, AgentLane checks it and coordinates landing through Git.
+
+**Your repo is the control plane.** The board lives in Git. No coordination server, database,
+hosted service, or shared agent runtime is required. Python standard library only.
+
+## See the difference
+
+Your hackathon team is building an **event check-in app before demo time**. Three human
+teammates direct coding agents: one builds the UI with Codex, another builds the API with
+Claude Code, and a third prepares the demo and docs with Gemini CLI. Everyone works toward
+the **same GitHub repository**, with a separate clone and unique identity for each agent.
+
+Here is how the same team can work with and without shared coordination:
+
+<picture>
+  <source media="(max-width: 640px)" srcset="docs/assets/workflow-comparison-mobile.svg">
+  <img src="docs/assets/workflow-comparison.svg" alt="Hackathon: three human teammates direct Codex on the UI, Claude Code on the API, and Gemini CLI on the demo and docs, all using separate clones of one GitHub repository. Before: UI and API work both change shared/types.ts, leaving overlapping edits and manual integration. After: agents claim separate paths, the frontend agent's overlapping claim is refused because the API lane owns shared types, and each lane passes project gates before direct landing in sequence." width="1120">
+</picture>
+
+**Parallel work, coordinated ownership.** Claims catch overlapping ownership before editing;
+shared notes carry context between workers; project gates check each direct landing.
+For example, the API worker can leave a note describing the response shape so the frontend
+worker can build against it while the demo worker prepares the walkthrough.
+
+## Why AgentLane?
+
+| | What you get |
+| :--- | :--- |
+| **Space to work** | Each worker claims its paths before editing. Overlapping claims are refused. |
+| **A shared picture** | Tasks, ownership, notes, and blockers travel with the repository. |
+| **Checked landings** | Ownership checks, rebasing, and project gates run before direct landing. |
+| **Your tools, together** | Different agents follow the same workflow through the CLI or MCP. |
+| **Recovery built in** | Heartbeats and expiring claims let another worker recover abandoned work. |
+| **A view for humans** | A local dashboard shows tasks, activity, and worker sessions in your browser. |
+
+One person directing several agents. A team bringing different tools. A hackathon moving fast.
+Each concurrent worker uses a **separate clone and unique name**. AgentLane coordinates
+cooperative workers; repository permissions remain your responsibility.
+
+## How it works
+
+**Plan → Claim → Build → Check → Land**
+
+Add tasks without reserving files. Take a task to claim its paths and get a branch. Work in your
+lane, leave notes for the next worker, and commit. Then let `agentlane done` coordinate landing.
+
+Each worker uses its own clone and claim branch. When workers finish, direct landings are
+serialized; each runs against the updated shared codebase.
+Follow the [three-worker walkthrough](docs/example.md) for the full flow.
+
+## Get started
 
 Requires Python 3.9+, Git and Bash (Git for Windows on Windows). There are no Python runtime
-dependencies. From an AgentLane source checkout:
+dependencies. Install from source:
 
 ```sh
+git clone https://github.com/thetrueshags/AgentLane.git
+cd AgentLane
 python3 -m pip install -e .
 agentlane --help
 agentlane --version
@@ -32,16 +91,9 @@ from a local source checkout or a maintainer-provided wheel, then work in that p
 No package has been published as part of this release preparation. On Windows, use `python` if
 that selects your intended interpreter.
 
-## Your first lane
+### Your first lane
 
-For optional foreground supervision in separate local clones, use
-`agentlane worker run --clone ../worker --name engineer -- <command> <args...>`.
-Local receipts and separate logs are available through `agentlane worker list`/`show` and
-read-only MCP tools. This also works in ordinary Git source checkouts without a board.
-Process exit never marks a task complete. See [local workers](docs/workers.md) for stdin files,
-timeouts, duplicate protection and orphan recovery.
-
-In a project whose shared board is initialized:
+In a project whose shared board is initialized, your agent can run:
 
 ```sh
 git clone <project-repository>
@@ -52,6 +104,7 @@ agentlane list --available
 agentlane take AL-12
 # Work inside the claim's paths, then commit your changes.
 agentlane note AL-12 "API complete; frontend can now use /auth/login"
+agentlane sync
 agentlane done AL-12
 ```
 
@@ -60,12 +113,33 @@ branch, timestamps, stale state and notes. For incomplete setup, run `agentlane 
 diagnoses without making changes. Install the local pre-push guardrail with `agentlane install`;
 `done` enforces its own checks regardless.
 
-`agentlane ui` serves a read-only dashboard on `http://127.0.0.1:8787/` so you can follow tasks,
-claims, notes, approvals and worker sessions in a browser instead of reading logs by hand. It
-binds loopback only and changes nothing. See the [localhost dashboard](docs/ui.md).
+**Start with a conversation.** Tell your agent:
 
-Your agent can handle these steps. Tell it: "Read AGENTS.md, inspect the board, and help me choose
-a task." See the [three-worker walkthrough](docs/example.md).
+> Read AGENTS.md, inspect the board, and help me choose a task.
+
+Setting up a new project? Follow [the one-time setup below](#set-up-a-project-once).
+Contributing to AgentLane itself? Use [CONTRIBUTING.md](CONTRIBUTING.md); no board membership is needed.
+
+## Follow the work
+
+```sh
+agentlane ui
+```
+
+Open **http://127.0.0.1:8787/** to follow tasks, claims, notes, approvals, activity, and worker
+sessions. The dashboard is read-only, binds to loopback, and uses no external assets.
+See the [localhost dashboard guide](docs/ui.md).
+
+For optional foreground supervision in separate local clones:
+
+```sh
+agentlane worker run --clone ../worker --name engineer -- <command> <args...>
+```
+
+Local receipts and separate logs are available through `agentlane worker list`/`show` and
+read-only MCP tools. This also works in ordinary Git source checkouts without a board.
+Process exit never marks a task complete. See [local workers](docs/workers.md) for stdin files,
+timeouts, duplicate protection and orphan recovery.
 
 ## Set up a project once
 
@@ -152,14 +226,25 @@ when a board is present, and expire stale claims. They target `main`/`board`; ad
 branch names. Set `SLACK_WEBHOOK_URL` for concise notices. Core commands need neither GitHub
 Actions nor Slack, and can use a local bare Git remote.
 
-## Contribute and learn more
+## Build with us
 
-Contributions go back to [thetrueshags/AgentLane](https://github.com/thetrueshags/AgentLane).
-Source contributors use ordinary branches and PRs without board membership.
+Help make parallel agent work easier to coordinate. Bring a bug report, a clearer setup step,
+an integration, or feedback from a real project. Source contributors use ordinary branches
+and PRs without board membership.
 
-- [Contribution guide](CONTRIBUTING.md)
+[**Contribute**](CONTRIBUTING.md) · [Report a bug](https://github.com/thetrueshags/AgentLane/issues/new/choose) · [Share an idea](https://github.com/thetrueshags/AgentLane/discussions)
+
+If AgentLane fits how you want to build, **give it a star** so you can find it again and help
+others discover it.
+
+## Go deeper
+
+- [CLI and workflow reference](docs/agentlane.md)
 - [Architecture and recovery](docs/architecture.md)
+- [Agent integrations and MCP](docs/integrations.md)
+- [Project gates](docs/gates.md)
 - [Localhost dashboard](docs/ui.md)
+- [Local worker supervision](docs/workers.md)
 - [Three-worker example](docs/example.md)
 - [Changelog](CHANGELOG.md) and [release instructions](docs/releasing.md)
 - [Community guidelines](CODE_OF_CONDUCT.md) and [private security reporting](SECURITY.md)
