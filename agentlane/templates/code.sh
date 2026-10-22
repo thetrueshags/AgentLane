@@ -2,6 +2,10 @@
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
+if [ -n "${AGENTLANE_GATE_COMMAND:-}" ]; then
+  exec bash -c "$AGENTLANE_GATE_COMMAND"
+fi
+
 ran=0
 py="${AGENTLANE_PYTHON:-python3}"
 if [ -f package.json ]; then
@@ -22,6 +26,10 @@ if [ -f pyproject.toml ] || [ -f pytest.ini ] || ls tests/*.py >/dev/null 2>&1; 
   ran=1
 fi
 if [ -f mix.exs ]; then mix test; ran=1; fi
+if [ -f Gemfile ]; then
+  if [ -x bin/selftest ]; then ./bin/selftest; else bundle exec rspec; fi
+  ran=1
+fi
 if [ -f go.mod ]; then go build ./... && go test ./...; ran=1; fi
 if [ -f Cargo.toml ]; then cargo test -q; ran=1; fi
 if [ -f pom.xml ]; then

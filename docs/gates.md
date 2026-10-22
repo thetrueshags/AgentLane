@@ -61,3 +61,13 @@ to the candidate; an already up-to-date main cannot let board completion publish
 The existing effective pre-push hook still receives its original input and arguments, and its
 rejection is honored. If another writer has already published the exact candidate, `done` fails
 with `nothing to land` and retains the claim for inspection instead of recording a stale landing.
+
+## Default project detection
+
+The installed code gate detects Node scripts, Python tests, Elixir/Phoenix (`mix test`),
+Ruby/Rails (`bin/selftest` when executable, otherwise `bundle exec rspec`), Go, Cargo,
+Maven and Gradle. In a repository with several detected stacks, it runs each detected gate.
+Set the trusted project environment variable `AGENTLANE_GATE_COMMAND` to replace detection
+with a repository-specific command, for example `AGENTLANE_GATE_COMMAND='mix test --warnings-as-errors'`.
+The override runs through Bash and its exit status is the gate result. Existing project gates
+are preserved during installation; customize or update those files explicitly.

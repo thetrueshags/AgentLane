@@ -46,6 +46,8 @@ DEFAULTS = {
     "heartbeat_min_seconds": 60,
     "landing_mode": "direct",
     "require_review": False,
+    "pr_draft": True,
+    "identity_mode": "self",
 }
 
 TASK_KINDS = ["code", "docs", "test", "research", "design", "ops", "other"]
@@ -83,6 +85,10 @@ def normalize_paths(paths):
 
 
 def validate_config(cfg):
+    if type(cfg["pr_draft"]) is not bool:
+        raise BoardError("Configuration pr_draft must be a boolean")
+    if cfg["identity_mode"] not in ("self", "github"):
+        raise BoardError("Configuration identity_mode must be 'self' or 'github'")
     if type(cfg["require_review"]) is not bool:
         raise BoardError("Configuration require_review must be a boolean")
     for key in ("ttl_minutes", "hot_ttl_minutes", "stall_minutes", "stall_release_minutes", "push_retries", "land_retries"):
@@ -114,6 +120,11 @@ def validate_record(kind, record):
     if kind == "tasks" and record["status"] not in ("open", "claimed", "blocked", "review", "done", "retired"):
         raise BoardError("Unknown task state %r" % record["status"])
     if kind == "tasks":
+        if "external_ref" in record and not isinstance(record["external_ref"], str):
+            raise BoardError("Task external_ref must be a string")
+        if "implementation_logins" in record and (not isinstance(record["implementation_logins"], list) or
+                any(not isinstance(value, str) or not value for value in record["implementation_logins"])):
+            raise BoardError("Task implementation_logins must be a list of logins")
         from agentlane.review import validate_task_review
         validate_task_review(record)
         from agentlane.retirement import validate_history
@@ -123,6 +134,10 @@ def validate_record(kind, record):
         if not isinstance(paths, list) or (kind == "claims" and not paths):
             raise BoardError("Malformed paths in %s" % record["id"])
         normalize_paths(paths)
+    if kind == "members":
+        for key in ("github_login", "git_email"):
+            if record.get(key) is not None and not isinstance(record[key], str):
+                raise BoardError("Member %s must be a string or null" % key)
     if kind == "claims":
         for key in ("created", "expires", "last_heartbeat"):
             if record.get(key):
@@ -208,14 +223,17 @@ def parse_iso(s):
     return dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
 
 
-def run(cmd, cwd=None, check=True, env=None, input_text=None):
+def run(cmd, cwd=None, check=True, env=None, input_text=None, timeout=None, text=True):
     full_env = dict(os.environ)
     if env:
         full_env.update(env)
-    p = subprocess.run(cmd, cwd=cwd, env=full_env, input=input_text, text=True,
-                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    p = subprocess.run(cmd, cwd=cwd, env=full_env, input=input_text, text=text,
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
     if check and p.returncode != 0:
-        raise BoardError("command failed: %s\n%s%s" % (" ".join(cmd), p.stdout, p.stderr))
+        output = p.stdout + p.stderr
+        if isinstance(output, bytes):
+            output = output.decode("utf-8", "replace")
+        raise BoardError("command failed: %s\n%s" % (" ".join(cmd), output))
     return p
 
 
@@ -230,6 +248,10 @@ def slug(text):
 
 def short_id():
     return uuid.uuid4().hex[:6]
+
+
+def task_title(task):
+    return ("[%s] " % task["external_ref"] if task.get("external_ref") else "") + task["title"]
 
 
 def read_json(path, default=None):
@@ -431,11 +453,17 @@ class Board:
             return False
         raise BoardError("push of board failed:\n" + p.stderr)
 
-    def txn(self, message, mutate):
+    def txn(self, message, mutate, joining=None):
         """Fetch, mutate, commit, push; retry on a lost race. `mutate(board)` returns a result."""
+        from agentlane.identity import policy, verify, require_registered
+        cfg = policy(self.repo)
+        if cfg["identity_mode"] == "github":
+            verify(self.repo, joining or self.repo.member, cfg)
         retries = int(self.cfg["push_retries"])
         for attempt in range(retries):
             self.sync()
+            if cfg["identity_mode"] == "github" and not joining:
+                require_registered(self, self.repo.member)
             result = mutate(self)
             if git(["status", "--porcelain"], cwd=self.dir).stdout.strip() == "":
                 return result
@@ -561,13 +589,19 @@ class Board:
 
     def note(self, member, kind, text, task=None, agent=None):
         rec = {"ts": iso(now()), "member": member, "kind": kind, "text": text, "task": task}
+        rec.update(self.member_identity(member))
         append_jsonl(self.path("notes", member + ".jsonl"), rec)
         self.event(member, "note", text, task=task, agent=agent, kind=kind)
 
     def event(self, member, etype, text, task=None, agent=None, **extra):
         rec = {"id": uuid.uuid4().hex, "ts": iso(now()), "member": member, "agent": agent, "type": etype, "task": task, "text": text}
+        rec.update(self.member_identity(member))
         rec.update(extra)
         append_jsonl(self.path("events", member + ".jsonl"), rec)
+
+    def member_identity(self, member):
+        record = read_json(self.path("members", member + ".json"), {})
+        return {key: record.get(key) for key in ("github_login", "git_email")}
 
     def all_notes(self):
         out = []
@@ -617,7 +651,7 @@ class Board:
     def render(self):
         at = now()
         claims = {c["id"]: c for c in self.claims()}
-        tasks = self.tasks()
+        tasks = [dict(t, title=task_title(t)) for t in self.tasks()]
         lines = ["# AgentLane Board", "", "Updated %s. Generated by AgentLane; do not edit by hand." % iso(at), ""]
 
         def minutes_left(c):
@@ -717,15 +751,17 @@ def cmd_init(args, repo):
 def cmd_join(args, repo):
     name = slug(args.name or repo.member)
     agent = args.agent or repo.agent
+    from agentlane.identity import verify
+    identity = verify(repo, name)
     local = os.path.join(repo.root, ".harness", "member.json")
     board = Board(repo, args.board_dir)
 
     def mutate(b):
-        write_json(b.path("members", name + ".json"), {"name": name, "agent": agent, "joined": iso(now())})
+        write_json(b.path("members", name + ".json"), {"name": name, "agent": agent, "joined": iso(now()), **identity})
         b.event(name, "joined", "%s joined with %s" % (name, agent), agent=agent)
-        return {"name": name, "agent": agent}
+        return {"name": name, "agent": agent, **identity}
 
-    res = board.txn("board: %s joined" % name, mutate)
+    res = board.txn("board: %s joined" % name, mutate, joining=name)
     write_json(local, {"name": name, "agent": agent})
     out(args, "welcome %s. Your agent is recorded as %s. Try: agentlane status" % (name, agent), res)
 
@@ -742,6 +778,8 @@ def cmd_add(args, repo):
              "kind": args.kind or "other", "globs": globs, "status": "open", "owner": None,
              "created_by": repo.member, "created": iso(now()),
              "implementation": {"version": 1, "owners": []}}
+        if args.ref is not None:
+            t["external_ref"] = args.ref
         b.save_task(t)
         b.event(repo.member, "add", "%s added '%s' to the backlog" % (repo.member, title),
                 task=t["id"], agent=repo.agent)
@@ -764,6 +802,8 @@ def status_data(board, repo):
              "owner": t.get("owner"), "globs": t.get("globs", []),
              "description": t.get("description", ""), "pr": t.get("pr"),
              "created": t.get("created"), "updated": t.get("updated", t.get("created"))}
+        if "external_ref" in t:
+            v["external_ref"] = t["external_ref"]
         if c:
             v["minutes_left"] = int((parse_iso(c["expires"]) - at).total_seconds() // 60)
             v["branch"] = c["branch"]
@@ -793,6 +833,9 @@ def status_data(board, repo):
 
 
 def format_status(d, brief=False):
+    d = dict(d)
+    for key in ("my_claims", "in_progress", "ready_to_test", "stuck", "open", "done"):
+        d[key] = [dict(t, title=task_title(t)) for t in d[key]]
     lines = []
     if d["my_claims"]:
         for v in d["my_claims"]:
@@ -900,7 +943,7 @@ def cmd_take(args, repo):
         for other in b.claims():
             if other["owner"] != me and other["branch"] == base:
                 raise BoardError("cannot stack on another member's branch %s" % base)
-        branch = "claim/%s-%s" % (t["id"], slug(t["title"]))
+        branch = "claim/%s-%s%s" % (t["id"], slug(t["external_ref"]) + "-" if t.get("external_ref") else "", slug(t["title"]))
         created = now()
         c = {"id": t["id"], "owner": me, "agent": agent, "globs": globs, "branch": branch, "base": base,
              "created": iso(created), "last_heartbeat": iso(created), "ttl_minutes": ttl,
@@ -910,6 +953,9 @@ def cmd_take(args, repo):
         t["owner"] = me
         from agentlane.review import record_owner
         record_owner(t, me)
+        login = b.member_identity(me)["github_login"]
+        if login and login not in t.setdefault("implementation_logins", []):
+            t["implementation_logins"].append(login)
         t["globs"] = globs
         b.save_task(t)
         b.event(me, "take", "%s took '%s' (%s) for %d min" % (me, t["title"], ", ".join(globs), ttl),
@@ -1081,6 +1127,10 @@ def cmd_handoff(args, repo):
         from agentlane.review import record_owner
         record_owner(t, me)
         record_owner(t, to)
+        for member in (me, to):
+            login = b.member_identity(member)["github_login"]
+            if login and login not in t.setdefault("implementation_logins", []):
+                t["implementation_logins"].append(login)
         if t["status"] == "blocked":
             t["status"] = "claimed"
         b.save_task(t)
@@ -1179,21 +1229,42 @@ def cmd_gate(args, repo):
         sys.exit(1)
 
 
-def submit_review(args, repo, board, claim):
+def create_pr(repo, branch, title, body, draft=True):
+    try:
+        with tempfile.TemporaryDirectory(prefix="agentlane-pr-") as directory:
+            command = ["gh", "pr", "create", "--base", repo.main, "--head", branch]
+            if title is None and body is None:
+                command.append("--fill")
+            else:
+                path = os.path.join(directory, "body.txt")
+                with open(path, "w", encoding="utf-8", newline="\n") as stream:
+                    stream.write(body)
+                command += ["--title", title, "--body-file", path]
+            if draft:
+                command.append("--draft")
+            p = run(command, cwd=repo.root, check=False)
+    except OSError as e:
+        raise BoardError("could not start GitHub CLI; install gh for PR review: %s" % e)
+    url = p.stdout.strip()
+    if p.returncode != 0 or not re.fullmatch(r"https://[^\s]+/pull/\d+", url):
+        raise BoardError("PR creation failed; claim/work branch kept. Resolve the error and retry: %s" %
+                         (p.stderr.strip() or url or "no PR URL returned"))
+    return url
+
+
+def submit_review(args, repo, board, claim, cfg, evidence):
     board.sync()
     current = my_claim(board, repo, claim["id"])
     if current.get("lease", current["created"]) != claim.get("lease", claim["created"]):
         raise BoardError("Claim changed during the gate; inspect agentlane show before retrying.")
     repo.git(["push", "-q", "-u", repo.remote, "HEAD"])
-    try:
-        p = run(["gh", "pr", "create", "--fill", "--draft", "--base", repo.main,
-                 "--head", claim["branch"]], cwd=repo.root, check=False)
-    except OSError as e:
-        raise BoardError("could not start GitHub CLI; claim kept. Install gh for PR review: %s" % e)
-    url = p.stdout.strip()
-    if p.returncode != 0 or not re.fullmatch(r"https://[^\s]+/pull/\d+", url):
-        raise BoardError("PR creation failed; claim kept. Resolve the error and retry: %s" %
-                         (p.stderr.strip() or url or "no PR URL returned"))
+    task = board.task(claim["id"])
+    body = "AgentLane task: %s\n" % task["id"]
+    if task.get("external_ref"):
+        body += "External reference: %s\n" % task["external_ref"]
+    body += "\n%s\n\nGate: %s\nCandidate: %s\n" % (task.get("description", ""), evidence["tier"], evidence["after"])
+    url = create_pr(repo, claim["branch"], task_title(task) if task.get("external_ref") else None,
+                    body if task.get("external_ref") else None, cfg["pr_draft"])
 
     def mutate(b):
         current = b.claim(claim["id"])
@@ -1202,6 +1273,7 @@ def submit_review(args, repo, board, claim):
         require_live(current, repo.cfg)
         t = b.task(claim["id"])
         t.update(status="review", last_branch=claim["branch"], pr=url)
+        t.setdefault("submissions", []).append(dict(evidence, pr=url))
         b.save_task(t)
         b.drop_claim(claim["id"])
         b.event(repo.member, "review", "%s opened a PR for '%s' %s" % (repo.member, t["title"], url),
@@ -1220,7 +1292,7 @@ def cmd_sync_reviews(args, repo):
         if task["status"] != "review" or not task.get("pr"):
             continue
         try:
-            p = run(["gh", "pr", "view", task["pr"], "--json", "state,mergeCommit,baseRefName"],
+            p = run(["gh", "pr", "view", task["pr"], "--json", "state,mergeCommit,baseRefName,mergedAt"],
                     cwd=repo.root, check=False)
         except OSError as e:
             raise BoardError("review sync needs GitHub CLI: %s" % e)
@@ -1238,19 +1310,42 @@ def cmd_sync_reviews(args, repo):
             repo.git(["fetch", "-q", repo.remote, repo.main])
             if repo.git(["merge-base", "--is-ancestor", sha, repo.remote_main()], check=False).returncode:
                 raise BoardError("PR merge %s is not on %s; task kept in review" % (sha, repo.main))
-            updates.append((task, "done", sha))
+            updates.append((task, "done", sha, pr.get("mergedAt")))
         elif state == "CLOSED":
-            updates.append((task, "open", None))
+            updates.append((task, "open", None, None))
+
+    recovery_updates = []
+    for task in board.tasks():
+        for recovery in task.get("recoveries", []):
+            if recovery["status"] != "review":
+                continue
+            p = run(["gh", "pr", "view", recovery["pr"], "--json", "state,mergeCommit,baseRefName,mergedAt"],
+                    cwd=repo.root, check=False)
+            if p.returncode:
+                raise BoardError("could not read recovery PR: " + p.stderr.strip())
+            pr = json.loads(p.stdout)
+            sha = (pr.get("mergeCommit") or {}).get("oid")
+            if pr.get("state") == "MERGED":
+                repo.git(["fetch", "-q", repo.remote, repo.main])
+                if pr.get("baseRefName") != repo.main or not sha or repo.git(
+                        ["merge-base", "--is-ancestor", sha, repo.remote_main()], check=False).returncode:
+                    raise BoardError("Recovery merge is not on target main; task kept unchanged")
+                recovery_updates.append((task["id"], recovery["pr"], "merged", sha))
+            elif pr.get("state") == "CLOSED":
+                recovery_updates.append((task["id"], recovery["pr"], "closed", None))
 
     def mutate(b):
         changed = []
-        for original, status, sha in updates:
+        for original, status, sha, merged_at in updates:
             t = b.task(original["id"])
             if t["status"] != "review" or t.get("pr") != original["pr"]:
                 continue
             t["status"] = status
             if sha:
-                t["landed"] = (t.get("landed") or []) + [{"after": sha, "pr": t["pr"]}]
+                submission = next((s for s in reversed(t.get("submissions", [])) if s["pr"] == t["pr"]), {})
+                t["landed"] = (t.get("landed") or []) + [dict(submission, after=sha, candidate=submission.get("after"),
+                                                              pr=t["pr"], timestamp=merged_at or iso(now()),
+                                                              merged_at=merged_at, reconciled=iso(now()))]
             else:
                 t["owner"] = None
                 t["last_pr"] = t.pop("pr")
@@ -1258,6 +1353,18 @@ def cmd_sync_reviews(args, repo):
             b.event(repo.member, "review_merged" if sha else "review_closed",
                     "'%s': PR merged" % t["title"] if sha else "'%s': PR closed; task reopened" % t["title"],
                     task=t["id"], agent=repo.agent)
+            changed.append(t)
+        for task_id, url, state, sha in recovery_updates:
+            t = b.task(task_id)
+            recovery = next((r for r in t.get("recoveries", []) if r["pr"] == url and r["status"] == "review"), None)
+            if not recovery:
+                continue
+            recovery.update(status=state, merge_commit=sha, reconciled=iso(now()))
+            if sha and t["status"] == "done" and t.get("landed", [{}])[-1].get("after") == recovery["after"]:
+                t.update(status="open", owner=None, failure=recovery["reason"])
+            b.save_task(t)
+            b.event(repo.member, "recovery_" + state, "Recovery PR %s: %s" % (state, url),
+                    task=task_id, agent=repo.agent, sha=sha)
             changed.append(t)
         return changed
 
@@ -1383,8 +1490,13 @@ def cmd_done(args, repo):
     log = []
     for attempt in range(1, attempts + 1):
         before, target_cfg = fetch_target(repo)
+        if target_cfg["identity_mode"] == "github":
+            from agentlane.identity import verify, require_registered
+            verify(repo, me, target_cfg)
+            require_registered(board, me)
         if target_cfg["require_review"] and (args.pr or repo.cfg["landing_mode"] == "pr" or target_cfg["landing_mode"] == "pr"):
-            raise BoardError("require_review is incompatible with PR mode/done --pr; host merges are not enforced")
+            raise BoardError("require_review is incompatible with PR mode/done --pr. PR mode uses host review; "
+                             "set require_review=false on target main and enforce required reviews/checks in GitHub.")
         # A reviewed merge already containing current main is a valid FF
         # candidate. Plain rebase would flatten it and invalidate its exact SHA.
         ancestry = repo.git(["merge-base", "--is-ancestor", before, "HEAD"], check=False)
@@ -1425,20 +1537,33 @@ def cmd_done(args, repo):
                                         task=t["id"], agent=agent))
             raise BoardError("gate failed (%s tier). Fix and run agentlane done again.\n%s" %
                              (tier, "\n".join("%s exit %d\n%s" % (r["script"], r["exit"], r["output"]) for r in results)))
-        if args.pr or repo.cfg["landing_mode"] == "pr":
+        # Re-read target policy even when the candidate asks for direct landing.
+        latest_base, latest_cfg = fetch_target(repo)
+        if args.pr or repo.cfg["landing_mode"] == "pr" or latest_cfg["landing_mode"] == "pr":
             # PR creation is not an atomic main update. Refresh policy after the gate
             # rather than submitting under a policy superseded while tests ran.
-            _, latest_cfg = fetch_target(repo)
             if latest_cfg["require_review"]:
-                raise BoardError("require_review is incompatible with PR mode/done --pr; host merges are not enforced")
-            submit_review(args, repo, board, c)
+                raise BoardError("require_review is incompatible with PR mode/done --pr. PR mode uses host review; "
+                                 "set require_review=false on target main and enforce required reviews/checks in GitHub.")
+            if latest_base != before:
+                continue
+            evidence = {"before": before, "after": gated_head, "paths": paths, "tier": tier,
+                        "results": results, "timestamp": iso(now()), "member": me, "agent": agent,
+                        **board.member_identity(me)}
+            submit_review(args, repo, board, c, latest_cfg, evidence)
             return
+        target_cfg = latest_cfg
         head = repo.git(["rev-parse", "HEAD"]).stdout.strip()
         board.sync()
+        if target_cfg["identity_mode"] == "github":
+            from agentlane.identity import require_registered, verify
+            verify(repo, me, target_cfg)
+            require_registered(board, me)
         current = my_claim(board, repo, c["id"])
         if current["branch"] != c["branch"] or current["globs"] != c["globs"] or current.get("lease", current["created"]) != c.get("lease", c["created"]):
             raise BoardError("Claim changed while running the gate; inspect agentlane show before retrying.")
-        landed = {"before": before, "after": head, "paths": paths, "tier": tier}
+        landed = {"before": before, "after": head, "paths": paths, "tier": tier, "results": results,
+                  "timestamp": iso(now()), "member": me, "agent": agent, **board.member_identity(me)}
         t2 = board.task(c["id"])
         if target_cfg["require_review"]:
             approval = require_approval(board, t2, current, head, before, target_cfg)
@@ -1572,56 +1697,89 @@ def cmd_narrate(args, repo):
 
 
 def cmd_revert_failed(args, repo):
-    """Used by the main-gate workflow: revert the range that broke main and reopen its task."""
+    """Propose recovery through a PR; main is only changed by the hosting service."""
+    from agentlane.review import fetch_target, full_sha
+    full_sha(args.before)
+    full_sha(args.after)
     board = Board(repo, args.board_dir)
     before, after = args.before, args.after
-    if repo.git(["status", "--porcelain", "--untracked-files=no"]).stdout.strip():
-        raise BoardError("Automatic recovery needs a clean CI checkout. Commit or preserve local changes first.")
-    repo.git(["fetch", "-q", repo.remote, repo.main])
+    if repo.git(["status", "--porcelain"]).stdout.strip():
+        raise BoardError("Recovery needs a clean checkout. Commit or preserve local changes first.")
+    base, cfg = fetch_target(repo)
+    if cfg["identity_mode"] == "github":
+        from agentlane.identity import verify
+        verify(repo, repo.member, cfg)
+    if before == after or repo.git(["merge-base", "--is-ancestor", before, after], check=False).returncode:
+        raise BoardError("Recovery requires a nonempty ancestor range")
+    if repo.git(["merge-base", "--is-ancestor", after, base], check=False).returncode:
+        raise BoardError("Recovery range must already be on target main")
     if args.check_base:
         repo.git(["checkout", "-q", "--detach", before])
         base_ok, _ = run_gate(repo, "code", repo.git(["ls-files"]).stdout.split("\n"))
         if not base_ok:
-            out(args, "main was already failing at %s; leaving the revert to the run that broke it" % before[:8],
+            out(args, "main was already failing at %s; no recovery proposed" % before[:8],
                 {"reverted": None, "skipped": "base already red", "base": before})
             return
-    def mutate(b):
-        hit = None
-        for t in b.tasks():
-            for l in t.get("landed") or []:
-                if l.get("after") == after:
-                    hit = t
-        if hit:
-            if hit["status"] != "done":
-                raise BoardError("Task %s is no longer done; inspect its current ownership before reverting." % hit["id"])
-            hit["status"] = "open"
-            hit["owner"] = None
-            hit["failure"] = args.reason or "gate failed on main"
-            b.save_task(hit)
-            b.event(hit.get("owner") or "board", "reverted",
-                    "'%s' was reverted from main: %s. Branch %s still has the work; take it again to fix." %
-                    (hit["title"], hit["failure"], hit.get("last_branch")), task=hit["id"])
-        else:
-            b.event("board", "reverted", "commits %s..%s reverted from main: %s" % (before[:8], after[:8], args.reason or "gate failed"))
-        return hit
+    board.sync()
+    hit = next((t for t in board.tasks() if any(l.get("after") == after for l in t.get("landed", []))), None)
+    if hit and hit["status"] != "done":
+        raise BoardError("Task %s is no longer done; inspect its ownership before proposing recovery" % hit["id"])
+    if hit is None:
+        # The main gate normally runs before a worker reconciles the host merge.
+        # Match that merge through the submission's PR, including squash/rebase merges.
+        for task in board.tasks():
+            if task["status"] != "review" or not task.get("pr"):
+                continue
+            result = run(["gh", "pr", "view", task["pr"], "--json", "state,mergeCommit,baseRefName"],
+                         cwd=repo.root, check=False)
+            if result.returncode:
+                raise BoardError("could not read PR while associating recovery: " + result.stderr.strip())
+            try:
+                pr = json.loads(result.stdout)
+                matches = (pr["state"] == "MERGED" and pr.get("baseRefName") == repo.main
+                           and (pr.get("mergeCommit") or {}).get("oid") == after)
+            except (ValueError, KeyError, TypeError, AttributeError):
+                raise BoardError("invalid PR response while associating recovery")
+            if matches:
+                hit = task
+                break
+    branch = "revert/%s-%s" % (after[:12], short_id())
+    repo.git(["checkout", "-q", "-b", branch, base])
+    # Invert the endpoint changes rather than assuming which merge parent was main.
+    # Three-way application preserves later main work or leaves conflicts for review.
+    patch = run(["git", "diff", "--binary", "--full-index", "--no-ext-diff", "--no-textconv",
+                 "--no-color", "--ignore-submodules=none", "--submodule=short",
+                 "--src-prefix=a/", "--dst-prefix=b/", after, before, "--"], cwd=repo.root, text=False).stdout
+    result = run(["git", "-c", "apply.ignoreWhitespace=no", "apply", "--3way", "--index", "--whitespace=nowarn"],
+                 cwd=repo.root, check=False, input_text=patch, text=False)
+    if result.returncode:
+        raise BoardError("Recovery conflicts; remote main unchanged. Resolve on %s:\n%s" %
+                         (branch, result.stderr.decode("utf-8", "replace")))
+    repo.git(["-c", "user.name=board", "-c", "user.email=board@agentlane.local", "commit", "-q",
+              "-m", "Revert changes %s..%s" % (before, after)])
+    repo.git(["push", "-q", "-u", repo.remote, "HEAD"])
+    reason = args.reason or "gate failed on main"
+    url = create_pr(repo, branch, "Revert %s" % (task_title(hit) if hit else after[:12]),
+                    "Proposed recovery for %s..%s\n\n%s" % (before, after, reason), cfg["pr_draft"])
+    recovery = {"before": before, "after": after, "branch": branch, "pr": url, "reason": reason,
+                "status": "review", "timestamp": iso(now()), "member": repo.member}
 
-    for attempt in range(int(repo.cfg["land_retries"])):
-        repo.git(["fetch", "-q", repo.remote, repo.main])
-        repo.git(["checkout", "-q", "--detach", repo.remote_main()])
-        expected_main = repo.git(["rev-parse", "HEAD"]).stdout.strip()
-        board.sync()
-        hit = mutate(board)
-        p = repo.git(["-c", "user.name=board", "-c", "user.email=board@agentlane.local",
-                      "revert", "--no-edit", "%s..%s" % (before, after)], check=False)
-        if p.returncode != 0:
-            repo.git(["revert", "--abort"], check=False)
-            raise BoardError("Automatic revert failed; remote unchanged. Inspect main and resolve the conflict:\n" + p.stderr)
-        if push_main_and_board(repo, board, "board: reverted %s" % after[:8], expected_main):
-            break
-    else:
-        raise BoardError("Competing pushes prevented recovery; no recovery was published. Retry revert-failed from a fresh checkout.")
-    out(args, "reverted %s..%s and reopened %s" % (before[:8], after[:8], hit["id"] if hit else "no matching task"),
-        {"reverted": [before, after], "task": hit})
+    def mutate(b):
+        task = b.task(hit["id"]) if hit else None
+        if task:
+            still_review = task["status"] == "review" and task.get("pr") == hit.get("pr")
+            reconciled = task["status"] == "done" and any(l.get("after") == after for l in task.get("landed", []))
+            if not (still_review or reconciled):
+                raise BoardError("Task changed while opening recovery PR %s; inspect its current ownership" % url)
+            task.setdefault("recoveries", []).append(recovery)
+            b.save_task(task)
+        b.event(repo.member, "revert_proposed", "Recovery proposed: %s (%s)" % (url, reason),
+                task=task["id"] if task else None, agent=repo.agent, recovery=recovery)
+        return task
+
+    task = board.txn("board: recovery PR proposed", mutate)
+    out(args, "Recovery PR opened at %s. Main and task completion await a verified merge." % url,
+        {"reverted": None, "pr": url, "task": task, "recovery": recovery})
 
 
 def cmd_check_push(args, repo):
@@ -1721,6 +1879,12 @@ def build_parser():
     add_worker_parser(sub)
     from agentlane.retirement import add_parsers as add_retirement_parsers
     add_retirement_parsers(sub)
+    from agentlane.evidence import cmd_export
+    s = sub.add_parser("export", help="export committed board history and evidence without changing the board")
+    s.add_argument("--since", help="inclusive ISO-8601 timestamp with timezone")
+    s.add_argument("--until", help="inclusive ISO-8601 timestamp with timezone")
+    s.add_argument("--out", required=True, help="new or empty output directory")
+    s.set_defaults(fn=cmd_export)
 
     s = sub.add_parser("doctor", help="diagnose setup without changing files or Git refs")
     s.set_defaults(fn=None)
@@ -1758,6 +1922,7 @@ def build_parser():
     s = sub.add_parser("add", help="plan a task without claiming paths or switching branches")
     s.add_argument("title")
     s.add_argument("--description", help="context, expected outcome and acceptance criteria")
+    s.add_argument("--ref", help="external tracker reference, e.g. TEAM-123")
     s.add_argument("--paths", nargs="+", help="repository-relative paths (quote wildcards)")
     s.add_argument("--globs", help="optional comma-separated paths; required when taking the task")
     s.add_argument("--kind", choices=TASK_KINDS)
@@ -1868,6 +2033,7 @@ def build_parser():
     s.add_argument("--name")
     s.add_argument("--agent")
     s.add_argument("--project", action="store_true", help="add missing project files and gates without overwriting existing ones")
+    s.add_argument("--no-claude-hooks", action="store_true", help="do not add Claude session and heartbeat hooks")
     s.set_defaults(fn=cmd_install)
 
     s = sub.add_parser("whoami", help="show the member and agent this checkout acts as")

@@ -13,6 +13,10 @@ from agentlane import __version__
 ROOT = os.environ.get("BOARD_REPO_ROOT") or os.getcwd()
 
 TOOLS = [
+    {"name": "board_export", "description": "Read committed board evidence into JSONL and a hashed manifest in a new/empty local directory; does not mutate the board.",
+     "annotations": {"readOnlyHint": True},
+     "inputSchema": {"type": "object", "required": ["out"], "properties": {
+         "out": {"type": "string"}, "since": {"type": "string"}, "until": {"type": "string"}}}},
     {"name": "board_worker_list", "description": "Read-only local worker runs in this coordinator. Process exit is not task completion.",
      "inputSchema": {"type": "object", "properties": {}}},
     {"name": "board_worker_show", "description": "Read-only local worker receipt and log paths; no launch or task mutation.",
@@ -29,6 +33,7 @@ TOOLS = [
      "description": "Plan work in the backlog without claiming paths or switching branches. Include context and acceptance criteria in description. Paths can be supplied when taking the task.",
      "inputSchema": {"type": "object", "required": ["title"], "properties": {
          "title": {"type": "string"}, "description": {"type": "string"},
+         "external_ref": {"type": "string", "description": "External tracker reference, e.g. TEAM-123"},
          "globs": {"type": "array", "items": {"type": "string"}},
          "kind": {"type": "string", "enum": ["code", "docs", "test", "research", "design", "ops", "other"]}}}},
     {"name": "board_retire", "description": "Retire an unclaimed backlog task with a reason; preserve history without landing code.",
@@ -118,6 +123,8 @@ def call(name, a):
                 return json.dumps({"ok": False, "error": "Invalid argument: " + key}), True
     if name == "board_worker_list":
         return board(["worker", "list"])
+    if name == "board_export":
+        return board(["export"] + ["--%s=%s" % (key, a[key]) for key in ("out", "since", "until") if key in a])
     if name == "board_worker_show":
         return board(["worker", "show", "--", a["run_id"]])
     if name == "board_doctor":
@@ -130,6 +137,8 @@ def call(name, a):
         return board(["sync"] + (["--reviews"] if a.get("reviews") else []))
     if name == "board_add":
         argv = ["add", a["title"]]
+        if "external_ref" in a:
+            argv += ["--ref=" + a["external_ref"]]
         for key in ("description", "kind"):
             if a.get(key):
                 argv += ["--" + key, a[key]]

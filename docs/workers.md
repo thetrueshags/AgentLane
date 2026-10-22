@@ -50,7 +50,8 @@ UTC start/finish times, supervisor/child PIDs, observed child exit code, timeout
 paths. `cleanup_confirmed` means the supervisor observed cleanup of its job/process group and
 reaped any spawned direct child; it does not certify task results or external services. New receipts
 identify `containment` as `windows-job` or `posix-process-group` once launch containment succeeds.
-They do not snapshot environment variables, credentials or prompt contents. **Arguments
+They retain the three correlation values described below, but do not snapshot the rest of the
+environment, credentials or prompt contents. **Arguments
 and worker logs can themselves contain secrets**: use files or the worker's own authentication
 mechanism for secrets rather than command-line arguments, and protect local Git metadata.
 
@@ -131,3 +132,12 @@ and receipt paths. There is no worker run/resolve MCP tool. Long-running executi
 the foreground CLI: tying a worker lifetime to a synchronous board tool call would make client
 timeouts and cancellation ambiguous and could leave unseen agent activity. MCP reads do not
 refresh task claims or perform orphan reconciliation.
+
+## Stable correlation variables
+
+The supervised process receives `AGENTLANE_TASK` (the `--task` value, or an empty string),
+`AGENTLANE_RUN_ID` (the receipt's generated run ID), and `AGENTLANE_MEMBER` (the `--name` label).
+An explicitly inherited value for any of these variables is preserved. The receipt's `correlation`
+object records the effective values, so an inherited outer run ID can be distinguished from the
+new local receipt ID. These are stable metadata for joining external usage or governance records;
+they do not authenticate membership or verify the task. Cost and token accounting stay external.

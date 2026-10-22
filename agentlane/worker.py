@@ -322,6 +322,11 @@ def run_worker(args, registry, coordinator_common):
                     job = WindowsJob()
                 options = {"creationflags": job.creationflags} if job else {"start_new_session": True}
                 env = worker_environment()
+                env.setdefault("AGENTLANE_TASK", args.task or "")
+                env.setdefault("AGENTLANE_RUN_ID", run_id)
+                env.setdefault("AGENTLANE_MEMBER", args.name)
+                receipt["correlation"] = {key: env[key] for key in
+                                          ("AGENTLANE_TASK", "AGENTLANE_RUN_ID", "AGENTLANE_MEMBER")}
                 child = subprocess.Popen(command, shell=False, cwd=clone, env=env, stdin=stdin,
                                          stdout=stdout, stderr=stderr, close_fds=True, **options)
                 receipt["child_pid"] = child.pid

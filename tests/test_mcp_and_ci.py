@@ -51,6 +51,24 @@ class McpWrapperTests(TestCase):
         status = json.loads(by_id[5]["result"]["content"][0]["text"])
         self.assertEqual(status["my_claims"][0]["title"], "Login page")
 
+    def test_reference_and_read_only_evidence_export(self):
+        output = str(Path(self.fx.tmp, "mcp-evidence"))
+        requests = [
+            {"id": 1, "method": "tools/call", "params": {"name": "board_add", "arguments": {"title": "Runbook", "external_ref": "TEAM-42"}}},
+            {"id": 2, "method": "tools/call", "params": {"name": "board_show", "arguments": {"task_id": "AL-1"}}},
+            {"id": 3, "method": "tools/call", "params": {"name": "board_export", "arguments": {"out": output}}},
+            {"id": 4, "method": "tools/call", "params": {"name": "board_add", "arguments": {"title": "Invalid", "external_ref": 42}}},
+        ]
+        replies = mcp_session(self.a, self.env, requests)
+        self.assertTrue(all(not row["result"]["isError"] for row in replies[:3]), replies)
+        task = json.loads(replies[1]["result"]["content"][0]["text"])
+        self.assertEqual(task["external_ref"], "TEAM-42")
+        exported = json.loads(replies[2]["result"]["content"][0]["text"])
+        self.assertTrue(Path(output, "manifest.json").is_file())
+        head = sh(["git", "ls-remote", "origin", "refs/heads/board"], self.a).stdout.split()[0]
+        self.assertEqual(head, exported["manifest"]["board_head"])
+        self.assertTrue(replies[3]["result"]["isError"])
+
     def test_malformed_requests_do_not_stop_server(self):
         replies = mcp_session(self.a, self.env, [
             [],
