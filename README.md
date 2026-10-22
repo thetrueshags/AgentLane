@@ -199,13 +199,19 @@ or rejected ref update does not mark work complete. Direct landing requires a re
 atomic pushes; there is no unsafe fallback.
 
 `.harness/gate/code.sh` defines acceptable work. The sample detects Python, Node package managers,
-Go, Rust, Elixir and Java. Documentation paths use `.harness/gate/docs.sh`. Missing gates fail
+Go, Rust, Elixir, Ruby/Rails and Java. Documentation paths use `.harness/gate/docs.sh`. Missing gates fail
 closed. See [gate customization](docs/gates.md).
 
 For GitHub review, set `landing_mode` to `pr` in `.harness/config.json`, or use `done --pr`.
 Successful submission releases ownership into review; after merging or closing, run
-`agentlane sync --reviews`. GitHub CLI/authentication are needed only for PR operations.
+`agentlane sync --reviews`. GitHub CLI/authentication are needed for PR operations and opt-in GitHub identity mode.
 PR submission is not completion. Core direct landing works with a writable Git remote.
+
+Target main's committed `landing_mode` enforces PR-only landing even if a candidate changes its
+local configuration. Set `pr_draft` to `false` when required reviewer workflows need ready PRs.
+Use `add --ref TEAM-123` to connect a task to a tracker ticket. Optional `identity_mode: "github"`
+binds members to their authenticated GitHub login. `agentlane export --out ./evidence` bundles
+committed board history and gate evidence; see [architecture](docs/architecture.md).
 
 For independent review before **direct** landing, opt in with `"require_review": true`.
 The policy is read from exact target main and takes effect after the enabling change lands.
@@ -223,8 +229,10 @@ See [integration details](docs/integrations.md).
 
 GitHub Actions and Slack are optional. Workflows can check landed work, recover failed landings
 when a board is present, and expire stale claims. They target `main`/`board`; adapt them for custom
-branch names. Set `SLACK_WEBHOOK_URL` for concise notices. Core commands need neither GitHub
-Actions nor Slack, and can use a local bare Git remote.
+branch names. Automated writes require `AGENTLANE_AUTOMATION_TOKEN`,
+`AGENTLANE_AUTOMATION_MEMBER` and [repository protection rules](docs/architecture.md#restricted-automation-credentials).
+Set `SLACK_WEBHOOK_URL` for concise notices. Core commands need neither GitHub Actions nor Slack,
+and can use a local bare Git remote.
 
 ## Build with us
 

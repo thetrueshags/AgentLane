@@ -217,7 +217,14 @@ class LandingTests(TestCase):
         claim = self.fx.data(self.fx.board("alice", "take", "--new", "Login page", "--globs", "src/auth/**"))["claim"]
         self.commit(self.a, "src/auth/login.py", "def login():\n    return 'broken'\n")
         landed = self.fx.data(self.fx.board("alice", "done"))["landed"]
-        res = self.fx.data(self.fx.board("bob", "revert-failed", landed["before"], landed["after"], "--reason", "smoke red"))
+        proposal = self.fx.github("bob", "revert-failed", landed["before"], landed["after"], "--reason", "smoke red")
+        self.assertEqual(proposal["task"]["status"], "done")
+        sha = sh(["git", "rev-parse", "HEAD"], self.b).stdout.strip()
+        host = str(Path(self.fx.tmp, "seed"))
+        sh(["git", "fetch", "-q", "origin", proposal["recovery"]["branch"]], host)
+        sh(["git", "push", "-q", "origin", sha + ":main"], host)  # Simulate host merge.
+        res = {"task": self.fx.github("bob", "sync-reviews", response=json.dumps(
+            {"state": "MERGED", "baseRefName": "main", "mergeCommit": {"oid": sha}}))["updated"][0]}
         self.assertEqual(res["task"]["status"], "open")
         self.assertEqual(res["task"]["failure"], "smoke red")
         sh(["git", "fetch", "-q", "origin"], self.b)
@@ -341,8 +348,12 @@ class RegressionTests(TestCase):
         self.assertEqual(res.get("skipped"), "base already red")
         sh(["git", "fetch", "-q", "origin"], self.b)
         self.assertIn("x = 1", sh(["git", "show", "origin/main:src/billing/x.py"], self.b).stdout)
-        res = self.fx.data(self.fx.board("bob", "revert-failed", bad["before"], bad["after"], "--check-base",
-                                         extra_env={"SIM_CI": "1"}))
+        with patch.dict(os.environ, {"SIM_CI": "1"}):
+            self.fx.github("bob", "revert-failed", bad["before"], bad["after"], "--check-base")
+        sha = sh(["git", "rev-parse", "HEAD"], self.b).stdout.strip()
+        sh(["git", "push", "-q", "origin", "HEAD:main"], self.b)
+        res = {"task": self.fx.github("bob", "sync-reviews", response=json.dumps(
+            {"state": "MERGED", "baseRefName": "main", "mergeCommit": {"oid": sha}}))["updated"][0]}
         self.assertEqual(res["task"]["status"], "open")
         sh(["git", "fetch", "-q", "origin"], self.b)
         self.assertNotIn("BROKEN", sh(["git", "show", "origin/main:src/auth/login.py"], self.b).stdout)

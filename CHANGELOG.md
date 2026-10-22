@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Preserve task association when recovery precedes PR reconciliation, and preserve healthy main
+  changes when recovering merge candidates with main as a second parent.
+- Preserve binary/CRLF recovery patches and gitlinks independently of Git display settings.
+- Recheck authenticated and registered GitHub identity after the gate before direct landing,
+  retain merged board history and ancestry-safe export context, batch historical evidence reads,
+  and install Claude hooks with LF endings on every platform.
+
+- Enforce target-main PR landing policy, configure draft submission, and propose recovery through
+  reviewed revert PRs. Bundled workflow tokens are read-only; optional automation uses a separate credential governed by repository rules.
+- Add external task references across CLI/MCP views, claim branches and PRs.
+- Add opt-in GitHub-bound member identity and retain login/email in review and activity evidence.
+- Export committed board history, historical claims and gate evidence as JSONL with a hash manifest.
+- Add Ruby/Rails gate detection, a project gate-command override and additive installed Claude hooks.
+- Pass stable task/run/member correlation variables to supervised workers and retain effective values.
+
 - Improve the local owner dashboard with responsive navigation, snapshot guidance, linked counts,
   task filters, blockers and full approval history. Correct future expiry wording and return 404
   for missing selected worker runs without showing unrelated logs.

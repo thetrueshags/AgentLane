@@ -30,9 +30,9 @@ class TestCase(unittest.TestCase):
         config.write_text("[maintenance]\n\tauto = false\n[gc]\n\tauto = 0\n"
                           "[core]\n\tautocrlf = false\n", encoding="utf-8")
         env = {key: value for key, value in os.environ.items()
-               if not key.startswith(("GIT_", "BOARD_", "AGENTLANE_")) and key != "SLACK_WEBHOOK_URL"}
+               if not key.startswith(("GIT_", "BOARD_", "AGENTLANE_", "GH_", "GITHUB_")) and key != "SLACK_WEBHOOK_URL"}
         env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=str(config),
-                   GIT_TERMINAL_PROMPT="0", GCM_INTERACTIVE="never")
+                   GIT_TERMINAL_PROMPT="0", GCM_INTERACTIVE="never", GH_CONFIG_DIR=temporary.name)
         isolation = patch.dict(os.environ, env, clear=True)
         isolation.start()
         self.addCleanup(isolation.stop)
@@ -161,6 +161,25 @@ class Fixture:
 
     def data(self, p):
         return json.loads(p.stdout)
+
+    def github(self, member, *argv, response=None):
+        """Run a command against real Git with only GitHub responses stubbed."""
+        import contextlib
+        import io
+        from agentlane import board as core
+        original = core.run
+
+        def run(command, **kwargs):
+            if command[0] == "gh":
+                return subprocess.CompletedProcess(command, 0, response or "https://github.com/team/project/pull/42\n", "")
+            return original(command, **kwargs)
+
+        args = core.build_parser().parse_args(["--json", *argv])
+        output = io.StringIO()
+        with patch.dict(os.environ, {"BOARD_MEMBER": member, "BOARD_AGENT": "test"}), \
+                patch.object(core, "run", side_effect=run), contextlib.redirect_stdout(output):
+            args.fn(args, core.Repo(self.clones[member]))
+        return json.loads(output.getvalue())
 
     def reject_next_push_to(self, ref):
         hook = os.path.join(self.origin, "hooks", "pre-receive")

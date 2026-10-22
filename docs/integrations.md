@@ -34,8 +34,20 @@ log paths, without board initialization. Launch and orphan resolution stay in th
 CLI; synchronous MCP tool timeouts/cancellation cannot safely define a long-running worker's
 lifetime. A zero exit code is a process outcome, never task completion.
 
-Claude's optional hooks show session status and heartbeat at turn completion. Other workers
+`agentlane install --project --agent claude-code` installs session status and turn-completion
+heartbeat hooks and merges their entries into `.claude/settings.json`. Existing hooks, permissions
+and custom hook scripts are preserved; repeated installs do not duplicate entries. Use
+`--no-claude-hooks` to skip this addition. The hook scripts use the installed `agentlane` CLI.
+They remain idle until this checkout has a local member identity. Other workers
 should call `agentlane heartbeat` during active work. Reads do not refresh claims. No agent
 process is automatically kept alive or restarted by AgentLane. Editor trust and execution
 settings still apply; use the shell CLI if a client cannot launch project MCP servers.
 Cloud workers need Git credentials and a writable clone like any other worker.
+
+`board_add` accepts an optional `external_ref` string; `board_show` returns it with the task.
+`board_export` accepts required `out` and optional `since`/`until` timestamps. It reads board
+history and writes a local evidence bundle without changing the board; see [architecture](architecture.md).
+
+If a local harness requires Git writes in a subagent, invoke mutating CLI/MCP commands from that
+subagent. Shell-command guards do not necessarily inspect Git operations inside MCP processes.
+AgentLane does not override that harness policy.

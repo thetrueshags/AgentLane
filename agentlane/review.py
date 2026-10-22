@@ -44,10 +44,13 @@ def validate_task_review(task):
     for approval in task["approvals"]:
         fields = {"id", "reviewer", "timestamp", "commit", "base", "evidence", "claim"}
         if (not isinstance(approval, dict) or not fields <= set(approval)
-                or set(approval) - fields - {"withdrawal"}):
+                or set(approval) - fields - {"withdrawal", "github_login", "git_email"}):
             raise core.BoardError("Malformed approval record")
         core.validate_id(approval["id"])
         core.validate_id(approval["reviewer"])
+        for key in ("github_login", "git_email"):
+            if approval.get(key) is not None and not isinstance(approval[key], str):
+                raise core.BoardError("Approval %s must be a string or null" % key)
         if approval["id"] in ids:
             raise core.BoardError("Duplicate approval ID")
         ids.add(approval["id"])
@@ -139,6 +142,9 @@ def require_approval(board, task, claim, commit, base, cfg):
         if ("withdrawal" not in approval and approval["commit"] == commit and approval["base"] == base
                 and approval["claim"] == identity(claim)):
             independent(board, task, claim, approval["reviewer"])
+            if cfg["identity_mode"] == "github":
+                from agentlane.identity import check_reviewer
+                check_reviewer(board, task, approval["reviewer"], approval.get("github_login"))
             return approval
     # Explain legacy failures even when there is no approval yet.
     if not task.get("implementation", {}).get("owners"):
@@ -169,6 +175,10 @@ def cmd_approve(args, repo):
         if not claim:
             raise core.BoardError("Approval requires a live implementation claim")
         independent(b, task, claim, repo.member)
+        from agentlane.identity import verify, check_reviewer
+        actor = verify(repo, repo.member, cfg)
+        if cfg["identity_mode"] == "github":
+            check_reviewer(b, task, repo.member, actor["github_login"])
         check_candidate(repo, claim, args.commit, base, cfg)
         if original is not None and original != identity(claim):
             raise core.BoardError("Claim changed during approval; test the new candidate/lease again")
@@ -177,7 +187,7 @@ def cmd_approve(args, repo):
         if repo.git(["rev-parse", "FETCH_HEAD"]).stdout.strip() != args.commit:
             raise core.BoardError("Approval commit must equal the pushed claim branch candidate")
         approval = {"id": uuid.uuid4().hex, "reviewer": repo.member, "timestamp": core.iso(core.now()),
-                    "commit": args.commit, "base": base, "evidence": args.evidence.strip(), "claim": identity(claim)}
+                    "commit": args.commit, "base": base, "evidence": args.evidence.strip(), "claim": identity(claim), **actor}
         task.setdefault("approvals", []).append(approval)
         b.save_task(task)
         b.event(repo.member, "approve", "Approved %s against %s: %s" % (args.commit, base, args.evidence),

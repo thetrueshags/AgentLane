@@ -138,9 +138,9 @@ class WorkflowTests(TestCase):
         landed = result["landed"]
         self.fx.reject_next_push_to("refs/heads/board")
         repo = self.m.Repo(self.b)
-        repo.cfg["land_retries"] = 1
+        repo.cfg["push_retries"] = 1
         args = self.m.build_parser().parse_args(["revert-failed", landed["before"], landed["after"]])
-        with self.assertRaises(self.m.BoardError):
+        with patch.object(self.m, "create_pr", return_value="https://github.com/team/project/pull/42"), self.assertRaises(self.m.BoardError):
             self.m.cmd_revert_failed(args, repo)
         sh(["git", "fetch", "origin", "main"], self.b)
         self.assertEqual(sh(["git", "rev-parse", "origin/main"], self.b).stdout.strip(), landed["after"])
@@ -157,7 +157,7 @@ class WorkflowTests(TestCase):
         self.edit_board(expire)
         repo = self.m.Repo(self.a)
         with self.assertRaisesRegex(self.m.BoardError, "expired"):
-            self.m.submit_review(self.m.build_parser().parse_args(["done", "--pr"]), repo, self.m.Board(repo), claim)
+            self.m.submit_review(self.m.build_parser().parse_args(["done", "--pr"]), repo, self.m.Board(repo), claim, repo.cfg, {})
 
     def test_concurrent_overlapping_claims_have_one_winner(self):
         barrier = threading.Barrier(2, timeout=20)

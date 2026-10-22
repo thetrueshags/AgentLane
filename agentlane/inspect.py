@@ -31,7 +31,7 @@ def cmd_list(args, repo):
     lines = ["ID        STATE      OWNER        TASK"]
     for t in result:
         lines.append("%-9s %-10s %-12s %s%s" % (
-            t["id"], t["status"], t.get("owner") or "-", t["title"], " [STALE]" if t["stale"] else ""))
+            t["id"], t["status"], t.get("owner") or "-", core.task_title(t), " [STALE]" if t["stale"] else ""))
         lines.append("  Paths: " + (", ".join(t.get("globs", [])) or "choose when claiming"))
     if not result:
         lines.append('No matching tasks. Create one with: agentlane add "title" --paths "path/**"')
@@ -42,7 +42,7 @@ def cmd_show(args, repo):
     board = core.Board(repo, args.board_dir)
     board.sync()
     t = task_view(board, board.task(args.task))
-    lines = ["%s - %s" % (t["id"], t["title"]), t.get("description") or "No description.",
+    lines = ["%s - %s" % (t["id"], core.task_title(t)), t.get("description") or "No description.",
              "State: %s%s" % (t["status"], " (stale claim)" if t["stale"] else ""),
              "Owner: " + (t.get("owner") or "unassigned"),
              "Paths: " + (", ".join(t.get("globs", [])) or "not selected"),

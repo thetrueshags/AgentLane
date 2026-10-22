@@ -147,7 +147,11 @@ ID` and remote history before retrying: the atomic completion is the receipt. Lo
 and any previously pushed remote branches are retained for inspection and rollback recovery.
 Delete them through normal Git once no longer needed. Local cleanup never determines shared success.
 
-PR mode runs pre-submission checks, pushes the branch and opens a draft PR. Failed creation keeps
+`landing_mode` is read from the exact fetched target main configuration. A candidate cannot
+turn a PR-only repository into a direct-landing repository. PR mode runs pre-submission checks,
+pushes the branch and opens a PR. `pr_draft` defaults to `true` for compatibility; set it to
+`false` on main when required review workflows need ready-for-review PRs. Confirm the repository's
+reviewer workflow handles drafts before relying on draft submissions. Failed creation keeps
 the claim. Successful submission moves the task to review and releases ownership. The host's merge
 workflow then applies. `sync --reviews` verifies merged commits against remote main or reopens
 closed PRs. It is explicit, not a background service.
@@ -190,11 +194,76 @@ gate and approval checks. New commits, amendments, a different base or lease req
 change the lease identity. Engineering keeps the claim while QA reviews, then engineering lands;
 handing implementation to QA makes QA an owner and therefore ineligible to approve.
 
-This is a cooperative Git protocol. Registered member names are not authenticated human
-identities, evidence is reviewer supplied, and writers able to bypass the CLI or edit board
-history can bypass policy. Use host permissions for adversarial enforcement. Existing CI
-`revert-failed` remains an automatic recovery operation, preserves review/provenance history,
-and uses the same atomic fast-forward and expected-main guard.
+### Identity and repository protection
+
+`identity_mode` defaults to `self`, which accepts locally chosen member names. Joining captures
+`git config user.email` and, when available, the authenticated `gh api user` login as `git_email`
+and `github_login`. Events, notes, approvals and landing evidence retain these fields. Email is
+Git configuration supplied by the worker; it is not independently verified.
+
+Set `identity_mode` to `github` on target main to require an authenticated GitHub CLI. Join requires
+the member name to match that login (lowercase). Mutations verify that login; reviewers must also
+have a different GitHub login from every implementation owner. Ownership login snapshots survive
+member re-registration. Existing members must rejoin to populate missing identities before mutations or direct landing.
+This binds a worker to its current GitHub credentials, not to an independent agent attestation.
+
+This remains a cooperative Git protocol. Review evidence is supplied by the reviewer, and writers
+able to edit board history directly can bypass CLI policy. Protect the board branch like main:
+restrict direct writers, disallow deletion/force pushes, and require an approved update path.
+The approved board automation must still be able to perform the protocol's compare-and-swap
+updates; a blanket PR requirement on board without such a writer prevents normal board commands.
+Use repository rules to prevent humans and automation from bypassing main's PR and check requirements.
+Git's `commit.gpgsign` configuration applies to board commits too; no code changes are needed for
+signing. Signing requires the worker's Git signing configuration and available key.
+
+### Task references and evidence
+
+Tasks may carry an optional string `external_ref`, set with `add --ref TEAM-123`. It is shown in
+CLI views and BOARD.md, included in PR titles/bodies, and slugged into claim branch names. AL task
+IDs remain stable. References are metadata; no tracker synchronization is performed.
+
+`agentlane export --out ./evidence [--since TIMESTAMP] [--until TIMESTAMP]` reads committed board
+history without publishing board changes. Bounds use inclusive ISO-8601 timestamps with timezones
+and select board commits by committer time, not individual record timestamps. All reachable
+commits, including merged branch history, are visited with ancestors before descendants. A snapshot
+before `--since`, ancestral to the first selected commit, is included as context so earlier approvals
+and members remain interpretable. Clock skew cannot make a descendant the context for its ancestor.
+When no commits match, the context is the latest eligible snapshot ancestral to the board head.
+The bundle contains JSONL for tasks, historical claims, events, notes, members, approvals, landings,
+gates and recovery proposals. Each row has `board_commit`, `context` and `record`. Distinct historical
+versions are retained; identical records are deduplicated per class. A claim that was dropped at
+landing is still available from history. `SUMMARY.md` lists landings and record counts.
+
+The manifest identifies the branch, observed head, included commit range and exact commit list.
+It hashes each file and the complete bundle: sort filenames, then hash each UTF-8 filename, a NUL
+byte, and its exact file bytes in sequence with SHA-256. The manifest itself is excluded. Hashes
+detect changes relative to the manifest; authenticity depends on trusted Git history and storage.
+Exports require a new or empty output directory. They may contain identities and test output;
+store them with the same access controls as repository evidence.
+
+New landing/submission records include gate script paths, exit codes, bounded output (the final
+4,000 characters per script), actor, agent and timestamp. PR reconciliation retains submission
+evidence alongside the verified merge SHA and PR URL. Legacy records lacking evidence remain
+explicitly incomplete; export never invents missing identity or gate results.
+
+## Restricted automation credentials
+
+Bundled workflows grant their default `GITHUB_TOKEN` only `contents: read`. To retain board
+tending and automatic recovery PRs, configure repository secret `AGENTLANE_AUTOMATION_TOKEN`
+and variable `AGENTLANE_AUTOMATION_MEMBER` with its lowercase GitHub login. Use a dedicated bot
+user's fine-grained token limited to this repository, with Contents and Pull requests write
+permissions. In GitHub identity mode, register that account on the board before enabling automation.
+Both settings are required for automated writes. Board push events from that same account are
+ignored to prevent recursive tending runs; scheduled and manual tending still run.
+
+GitHub token permissions cannot be limited to individual branches. Repository administrators
+must enforce main's PR requirement, required checks and reviews for this account as well, with
+no bypass permission. Protect board against unapproved writers while allowing this account's
+board updates and permitting work/recovery branches. The separate credential is restricted by
+those host rules; declaring it a secret alone does not stop pushes to main. Validate the rules
+with the bot account before enabling the workflows. Token creation, rotation and repository-rule
+administration happen outside AgentLane. Without the credential, CLI workflows remain available
+and the main gate still fails on test failures.
 
 ## Failure recovery
 
@@ -205,10 +274,18 @@ and uses the same atomic fast-forward and expected-main guard.
 - **Gate failure:** inspect output, fix and commit the change, then retry `done`.
 - **Rebase conflict:** the failed rebase is aborted; resolve on the work branch and retry.
 - **Network failure:** no success is reported. Fetch and inspect before retrying.
-- **Post-merge gate failure:** optional automation reverts the failed range and reopens its task.
-  It checks the base first to avoid reverting an innocent landing on already-broken main.
-  The revert and board update use one atomic push, retrying competing ref updates. Failed
-  recovery requires maintainer inspection; it never reports a partial rollback as success.
+- **Post-merge gate failure:** the bundled main gate reports failure with a read-only default
+  token. With the separately configured automation credential described above, it proposes a recovery PR.
+  A maintainer can also run `agentlane revert-failed BEFORE_SHA AFTER_SHA --check-base --reason TEXT`
+  from a clean checkout. It opens a recovery branch and PR; it never pushes main. Review and merge
+  through the normal required checks, then run `sync --reviews`. Only a verified recovery merge
+  reopens the original task. Recovery can locate an original PR that has merged but has not yet
+  been reconciled by `sync --reviews`; both merge outcomes are then applied together.
+  Recovery inverts the changes between the supplied commits and applies them to current main
+  with a three-way merge, preserving unrelated earlier and later changes regardless of merge-parent
+  order. Closed recovery PRs preserve task completion. Conflicts remain on the local recovery
+  branch for maintainer resolution; no recovery branch or board update is published in that case. `--check-base` avoids proposing recovery for an already-failing base.
+  A failed PR/board update can leave a published recovery branch or PR; inspect GitHub before retrying.
 
 ## Events and Slack
 

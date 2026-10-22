@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: board
@@ -16,12 +16,16 @@ concurrency:
 
 jobs:
   tend:
-    if: github.event_name != 'push' || github.actor != 'github-actions[bot]'
+    if: github.event_name != 'push' || (github.actor != 'github-actions[bot]' && github.actor != vars.AGENTLANE_AUTOMATION_MEMBER)
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.AGENTLANE_AUTOMATION_TOKEN }}
+      BOARD_MEMBER: ${{ vars.AGENTLANE_AUTOMATION_MEMBER }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: main
+          token: ${{ secrets.AGENTLANE_AUTOMATION_TOKEN || github.token }}
       - name: check whether this project uses a shared board
         id: board
         run: |
@@ -30,13 +34,14 @@ jobs:
             echo "exists=true" >> "$GITHUB_OUTPUT"
           fi
       - uses: actions/checkout@v4
-        if: steps.board.outputs.exists == 'true'
+        if: steps.board.outputs.exists == 'true' && env.GH_TOKEN != '' && env.BOARD_MEMBER != ''
         with:
           ref: board
+          token: ${{ secrets.AGENTLANE_AUTOMATION_TOKEN || github.token }}
           path: board-data
           fetch-depth: 0
       - name: expire stale claims and narrate new events
-        if: steps.board.outputs.exists == 'true'
+        if: steps.board.outputs.exists == 'true' && env.GH_TOKEN != '' && env.BOARD_MEMBER != ''
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
@@ -44,7 +49,7 @@ jobs:
           python3 bin/board --board-dir board-data narrate
           python3 bin/board --board-dir board-data render
       - name: push board changes
-        if: steps.board.outputs.exists == 'true'
+        if: steps.board.outputs.exists == 'true' && env.GH_TOKEN != '' && env.BOARD_MEMBER != ''
         run: |
           cd board-data
           git config user.name board
@@ -53,3 +58,6 @@ jobs:
           git diff --cached --quiet && exit 0
           git commit -q -m "board: tend"
           git push -q origin HEAD:board
+      - name: explain missing automation credentials
+        if: env.GH_TOKEN == '' || env.BOARD_MEMBER == ''
+        run: echo 'Board tending skipped. Configure AGENTLANE_AUTOMATION_TOKEN, AGENTLANE_AUTOMATION_MEMBER and repository rules before enabling writes.'

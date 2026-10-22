@@ -49,6 +49,31 @@ def install_agent(repo, agent):
     return "Created " + relative
 
 
+def install_claude_hooks(repo):
+    path = Path(repo.root, ".claude/settings.json")
+    config = core.read_json(str(path), {})
+    if not isinstance(config, dict) or not isinstance(config.get("hooks", {}), dict):
+        raise core.BoardError("Claude settings and hooks must be JSON objects; existing file preserved")
+    hooks = config.setdefault("hooks", {})
+    for event, filename in (("SessionStart", "claude-session-start.sh"), ("Stop", "claude-stop.sh")):
+        entries = hooks.setdefault(event, [])
+        if not isinstance(entries, list):
+            raise core.BoardError("Claude %s hooks must be a list; existing file preserved" % event)
+        command = 'bash "$CLAUDE_PROJECT_DIR"/.harness/hooks/' + filename
+        if not any(isinstance(entry, dict) and isinstance(entry.get("hooks"), list) and
+                   any(isinstance(h, dict) and h.get("command") == command for h in entry["hooks"])
+                   for entry in entries):
+            entries.append({"hooks": [{"type": "command", "command": command}]})
+    for filename in ("claude-session-start.sh", "claude-stop.sh"):
+        target = Path(repo.root, ".harness/hooks", filename)
+        if not target.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with target.open("w", encoding="utf-8", newline="\n") as stream:
+                stream.write((Path(__file__).parent / "templates" / filename).read_text(encoding="utf-8"))
+            target.chmod(0o755)
+    core.write_json(str(path), config)
+
+
 def install(args, repo):
     added = []
     if args.project:
@@ -74,6 +99,8 @@ def install(args, repo):
             ignore.write_text(existing.rstrip() + "\nmember.json\n", encoding="utf-8")
     hook = install_hook(repo)
     integration = install_agent(repo, args.agent or repo.agent)
+    if args.project and (args.agent or repo.agent) in ("claude", "claude-code") and not args.no_claude_hooks:
+        install_claude_hooks(repo)
     if args.name or args.agent:
         core.write_json(os.path.join(repo.root, ".harness/member.json"),
                         {"name": core.slug(args.name or repo.member), "agent": args.agent or repo.agent})

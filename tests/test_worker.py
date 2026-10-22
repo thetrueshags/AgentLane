@@ -105,6 +105,20 @@ class WorkerTests(TestCase):
             return runs if len(runs) == count and all(r["child_pid"] and r["status"] == "running" for r in runs) else None
         return self.wait_for(read)
 
+    def test_correlation_environment_and_receipt(self):
+        code = "import json, os; print(json.dumps({k: os.environ[k] for k in ('AGENTLANE_TASK', 'AGENTLANE_RUN_ID', 'AGENTLANE_MEMBER')}))"
+        result = self.run_worker(code, options=("--task", "AL-12"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        receipt = json.loads(result.stdout)
+        correlation = json.loads(Path(receipt["stdout_log"]).read_text())
+        self.assertEqual(correlation, {"AGENTLANE_TASK": "AL-12", "AGENTLANE_RUN_ID": receipt["run_id"], "AGENTLANE_MEMBER": "engineer"})
+        self.assertEqual(receipt["correlation"], correlation)
+        self.env.update(AGENTLANE_TASK="outer-task", AGENTLANE_RUN_ID="outer-run", AGENTLANE_MEMBER="outer-member")
+        result = self.run_worker(code)
+        receipt = json.loads(result.stdout)
+        self.assertEqual(receipt["correlation"]["AGENTLANE_RUN_ID"], "outer-run")
+        self.assertNotEqual(receipt["run_id"], "outer-run")
+
     def test_success_literal_arguments_stdin_logs_and_no_board(self):
         prompt = self.base / "prompt with spaces.txt"
         prompt.write_bytes(b"literal $() 'prompt'\nsecond line\n")

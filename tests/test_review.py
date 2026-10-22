@@ -96,6 +96,140 @@ class ReviewTests(TestCase):
     def invoke_done(self):
         core.cmd_done(core.build_parser().parse_args(["done", "--task", self.task]), core.Repo(self.a))
 
+    def test_evidence_export_retains_history_and_verifiable_hashes(self):
+        import hashlib
+        self.candidate()
+        self.approve()
+        self.done()
+        self.git(self.a, "checkout", "-q", "main")
+        self.git(self.b, "checkout", "-q", "main")
+        self.git(str(Path(self.fx.tmp, "seed")), "pull", "-q", "--ff-only")
+        self.configure(require_review=False)
+        self.candidate()
+        self.done()
+        output = Path(self.fx.tmp, "evidence")
+        before = self.git(self.a, "ls-remote", "origin", "refs/heads/board")
+        result = self.fx.data(self.fx.board("alice", "export", "--out", str(output)))
+        manifest = result["manifest"]
+        digest = hashlib.sha256()
+        for name, expected in sorted(manifest["files"].items()):
+            data = Path(output, name).read_bytes()
+            self.assertEqual(hashlib.sha256(data).hexdigest(), expected)
+            digest.update(name.encode() + b"\0" + data)
+        self.assertEqual(digest.hexdigest(), manifest["sha256"])
+        rows = lambda name: [json.loads(line)["record"] for line in Path(output, name + ".jsonl").read_text().splitlines()]
+        self.assertEqual(len(rows("landings")), 2)
+        self.assertEqual(len(rows("approvals")), 1)
+        self.assertEqual(len(rows("claims")), 2)
+        self.assertTrue(all(row["results"][0]["exit"] == 0 for row in rows("gates")))
+        self.assertEqual(len(rows("members")), 2)
+        self.assertEqual(self.git(self.a, "ls-remote", "origin", "refs/heads/board"), before)
+        self.assertIn("alice using", Path(output, "SUMMARY.md").read_text())
+        result = self.fx.board("alice", "export", "--out", str(output), check=False)
+        self.denied(result, "existing files")
+        self.denied(self.fx.board("alice", "export", "--since", "invalid", "--out", str(output), check=False), "ISO-8601")
+        past = Path(self.fx.tmp, "past-evidence")
+        self.fx.board("alice", "export", "--until", "2000-01-01T00:00:00Z", "--out", str(past))
+        self.assertEqual(Path(past, "tasks.jsonl").read_text(), "")
+        future = Path(self.fx.tmp, "context-evidence")
+        result = self.fx.data(self.fx.board("alice", "export", "--since", "2999-01-01T00:00:00Z", "--out", str(future)))
+        self.assertEqual(result["manifest"]["commits"], [manifest["board_head"]])
+        self.assertTrue(all(json.loads(line)["context"] for line in Path(future, "tasks.jsonl").read_text().splitlines()))
+
+    def test_github_join_binding_and_alias_review_refusal(self):
+        from agentlane import identity
+        self.configure(identity_mode="github")
+        github = lambda repo, required=False: {"github_login": "alice", "git_email": "alice@example.test"}
+        with patch.object(identity, "capture", side_effect=github):
+            args = core.build_parser().parse_args(["join", "--name", "alias", "--agent", "test"])
+            with self.assertRaisesRegex(core.BoardError, "authenticated gh login"):
+                core.cmd_join(args, core.Repo(self.a))
+            args = core.build_parser().parse_args(["join", "--name", "alice", "--agent", "test"])
+            with patch.dict(os.environ, {"BOARD_MEMBER": "alice"}):
+                core.cmd_join(args, core.Repo(self.a))
+        # Owner/reviewer names differ, but both records resolve to one GitHub account.
+        task = {"id": "AL-1", "implementation": {"version": 1, "owners": ["alice"]}}
+        board = core.Board(core.Repo(self.a))
+        board.sync()
+        with patch.object(board, "members", return_value=[{"name": "alice", "github_login": "alice"},
+                                                         {"name": "alias", "github_login": "alice"}]):
+            with self.assertRaisesRegex(core.BoardError, "independent"):
+                identity.check_reviewer(board, task, "alias", "alice")
+        event = board.all_events()[-1]
+        self.assertEqual(event["github_login"], "alice")
+        self.assertEqual(event["git_email"], "alice@example.test")
+
+    def test_github_mode_checks_actual_login_for_approval(self):
+        from agentlane import identity
+        self.configure(identity_mode="github")
+        def actor(repo, required=False):
+            name = Path(repo.root).name
+            return {"github_login": name, "git_email": name + "@example.test"}
+        with patch.object(identity, "capture", side_effect=actor):
+            for member in ("alice", "bob"):
+                self.fx.github(member, "join", "--name", member, "--agent", "test")
+            result = self.fx.github("alice", "take", "--new", "Auth", "--globs", "src/auth/**")
+            self.task = result["task"]["id"]
+            self.branch = result["claim"]["branch"]
+            self.base = self.git(self.a, "rev-parse", "HEAD")
+            self.sha = self.commit(self.a, "src/auth/login.py", "work\n")
+            self.git(self.a, "push", "-q", "origin", self.branch)
+            self.checkout_reviewer()
+            argv = ("approve", self.task, "--commit", self.sha, "--base", self.base, "--evidence", "tests passed")
+            with patch.object(identity, "capture", return_value={"github_login": "alice", "git_email": "alice@example.test"}):
+                with self.assertRaisesRegex(core.BoardError, "authenticated gh login"):
+                    self.fx.github("bob", *argv)
+            approval = self.fx.github("bob", *argv)
+            self.assertEqual(approval["github_login"], "bob")
+            self.assertEqual(approval["git_email"], "bob@example.test")
+            self.assertEqual(self.task_state()["implementation_logins"], ["alice"])
+
+    def test_existing_self_mode_claim_must_rejoin_before_github_landing(self):
+        from agentlane import identity
+        self.configure(require_review=False)
+        self.candidate()
+        seed = str(Path(self.fx.tmp, "seed"))
+        config = json.loads(Path(seed, ".harness/config.json").read_text())
+        config["identity_mode"] = "github"
+        target = self.commit(seed, ".harness/config.json", json.dumps(config))
+        self.git(seed, "push", "-q", "origin", "main")
+        actor = {"github_login": "alice", "git_email": "alice@example.test"}
+        with patch.object(identity, "capture", return_value=actor):
+            with self.assertRaisesRegex(core.BoardError, "GitHub identity must be registered"):
+                self.fx.github("alice", "done", self.task)
+            self.assertEqual(self.remote_main(), target)
+            self.fx.github("alice", "join", "--name", "alice", "--agent", "test")
+            result = self.fx.github("alice", "done", self.task)
+        self.assertEqual(result["landed"]["github_login"], "alice")
+        self.assertEqual(result["landed"]["git_email"], "alice@example.test")
+        board = core.Board(core.Repo(self.a))
+        board.sync()
+        event = next(e for e in reversed(board.all_events()) if e["type"] == "done")
+        self.assertEqual(event["github_login"], "alice")
+
+    def test_github_login_is_rechecked_after_gate_before_direct_landing(self):
+        from agentlane import identity
+        self.configure(require_review=False, identity_mode="github")
+        actor = {"github_login": "alice", "git_email": "alice@example.test"}
+        with patch.object(identity, "capture", side_effect=lambda *a, **kw: dict(actor)):
+            self.fx.github("alice", "join", "--name", "alice", "--agent", "test")
+            taken = self.fx.github("alice", "take", "--new", "Docs", "--globs", "docs/**")
+            task = taken["task"]["id"]
+            self.commit(self.a, "docs/report.md")
+            before = self.remote_main()
+            run_gate = core.run_gate
+
+            def gate_then_switch_login(*args, **kwargs):
+                results = run_gate(*args, **kwargs)
+                actor["github_login"] = "bob"
+                return results
+
+            with patch.object(core, "run_gate", side_effect=gate_then_switch_login):
+                with self.assertRaisesRegex(core.BoardError, "authenticated gh login"):
+                    self.fx.github("alice", "done", task)
+        self.assertEqual(self.remote_main(), before)
+        self.assertEqual(self.fx.data(self.fx.board("alice", "show", task))["status"], "claimed")
+
     def test_happy_path_creator_can_review_and_history_survives(self):
         self.candidate(creator="bob")
         approval = self.fx.data(self.approve())
@@ -441,7 +575,11 @@ class ReviewTests(TestCase):
         self.candidate()
         approval = self.fx.data(self.approve())
         self.done()
-        self.fx.board("alice", "revert-failed", self.base, self.sha, "--reason", "test recovery")
+        self.fx.github("alice", "revert-failed", self.base, self.sha, "--reason", "test recovery")
+        merge = self.git(self.a, "rev-parse", "HEAD")
+        self.git(self.a, "push", "-q", "origin", "HEAD:main")
+        self.fx.github("alice", "sync-reviews", response=json.dumps(
+            {"state": "MERGED", "baseRefName": "main", "mergeCommit": {"oid": merge}}))
         task = self.task_state()
         self.assertEqual(task["status"], "open")
         self.assertEqual(task["implementation"]["owners"], ["alice"])
