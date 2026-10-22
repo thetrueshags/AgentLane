@@ -155,7 +155,8 @@ class ReviewTests(TestCase):
                                                          {"name": "alias", "github_login": "alice"}]):
             with self.assertRaisesRegex(core.BoardError, "independent"):
                 identity.check_reviewer(board, task, "alias", "alice")
-        event = board.all_events()[-1]
+        # Member logs retain append order even when events share a timestamp.
+        event = core.read_jsonl(board.path("events", "alice.jsonl"))[-1]
         self.assertEqual(event["github_login"], "alice")
         self.assertEqual(event["git_email"], "alice@example.test")
 

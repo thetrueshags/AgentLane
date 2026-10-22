@@ -381,7 +381,10 @@ class AgentLaneTests(TestCase):
         sh(["git", "config", "apply.whitespace", "fix"], self.a)
         sh(["git", "config", "apply.ignoreWhitespace", "change"], self.a)
         self.invoke("revert-failed", landed["before"], landed["after"])
-        self.assertEqual(Path(self.a, "docs/spaces.txt").read_bytes(), original)
+        # Git may use native checkout line endings; compare committed bytes.
+        restored = subprocess.run(["git", "show", "HEAD:docs/spaces.txt"], cwd=self.a,
+                                  capture_output=True, check=True).stdout
+        self.assertEqual(restored, original)
 
 
 if __name__ == "__main__":

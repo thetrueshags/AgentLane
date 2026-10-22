@@ -45,8 +45,8 @@ class EvidenceTests(TestCase):
 
         with patch.object(subprocess, "Popen", side_effect=launch), contextlib.redirect_stdout(io.StringIO()):
             evidence.cmd_export(args, core.Repo(self.root))
-        tasks = [json.loads(line)["record"] for line in (destination / "tasks.jsonl").read_text().splitlines()]
-        notes = [json.loads(line)["record"] for line in (destination / "notes.jsonl").read_text().splitlines()]
+        tasks = [json.loads(line)["record"] for line in (destination / "tasks.jsonl").read_text(encoding="utf-8").splitlines()]
+        notes = [json.loads(line)["record"] for line in (destination / "notes.jsonl").read_text(encoding="utf-8").splitlines()]
         self.assertEqual(len(tasks), 20)
         self.assertTrue(all(task["title"] == title for task in tasks))
         self.assertEqual({note["text"] for note in notes}, {"Note %d" % n for n in range(12)})
@@ -69,7 +69,7 @@ class EvidenceTests(TestCase):
         first_commits["Third note"] = core.git(["rev-parse", "HEAD"], cwd=board.dir).stdout.strip()
         output = Path(self.fx.tmp, "evidence")
         self.fx.board("alice", "export", "--out", str(output))
-        rows = [json.loads(line) for line in (output / "notes.jsonl").read_text().splitlines()]
+        rows = [json.loads(line) for line in (output / "notes.jsonl").read_text(encoding="utf-8").splitlines()]
         self.assertEqual({row["record"]["text"]: row["board_commit"] for row in rows}, first_commits)
 
     def test_bounded_export_context_cannot_descend_from_selected_commit(self):
@@ -84,7 +84,7 @@ class EvidenceTests(TestCase):
         result = self.fx.data(self.fx.board("alice", "export", "--since", "2030-01-01T10:25:00Z",
                                            "--out", str(output)))
         self.assertEqual(result["manifest"]["context_commit"], commits[0])
-        rows = [json.loads(line) for line in (output / "notes.jsonl").read_text().splitlines()]
+        rows = [json.loads(line) for line in (output / "notes.jsonl").read_text(encoding="utf-8").splitlines()]
         selected = next(row for row in rows if row["record"]["text"] == "Selected")
         self.assertEqual(selected["board_commit"], commits[1])
         self.assertFalse(selected["context"])
@@ -108,5 +108,5 @@ class EvidenceTests(TestCase):
         git("push", "-q", board.remote, "HEAD:refs/heads/" + board.branch)
         output = Path(self.fx.tmp, "merged-evidence")
         self.fx.board("alice", "export", "--out", str(output))
-        rows = [json.loads(line) for line in (output / "tasks.jsonl").read_text().splitlines()]
+        rows = [json.loads(line) for line in (output / "tasks.jsonl").read_text(encoding="utf-8").splitlines()]
         self.assertEqual(rows, [{"board_commit": introduced, "context": False, "record": task}])
