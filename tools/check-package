@@ -55,4 +55,14 @@ with tempfile.TemporaryDirectory(prefix="agentlane-wheel-") as temporary:
     assert landed["task"]["status"] == "done"
     run([cli, "install", "--project", "--agent", "codex"], project)
     assert "agentlane" in (project / ".codex/config.toml").read_text()
-print("Wheel installation, CLI and standalone-project landing passed.")
+    run([cli, "install", "--project", "--agent", "copilot", "--mcp-read-only"], project)
+    assert json.loads((project / ".vscode/mcp.json").read_text())["servers"]["board"]["args"] == ["mcp", "--read-only"]
+    instructions = (project / ".github/copilot-instructions.md").read_bytes()
+    assert b"AGENTS.md" in instructions
+    run([cli, "install", "--project", "--agent", "copilot-cloud"], project)
+    cloud = json.loads((project / ".harness/integrations/copilot-cloud.json").read_text())
+    assert cloud["mcpServers"]["board"]["args"] == ["mcp", "--read-only"]
+    assert cloud["mcpServers"]["board"]["tools"] == ["board_status", "board_list", "board_show"]
+    assert (project / ".github/copilot-instructions.md").read_bytes() == instructions
+    assert "--read-only" in run([cli, "mcp", "--help"], project)
+print("Wheel installation, CLI, standalone-project landing and both Copilot configurations passed.")

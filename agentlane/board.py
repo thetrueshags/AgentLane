@@ -1889,6 +1889,7 @@ def build_parser():
     s = sub.add_parser("doctor", help="diagnose setup without changing files or Git refs")
     s.set_defaults(fn=None)
     s = sub.add_parser("mcp", help="serve the shared agent tools over stdio")
+    s.add_argument("--read-only", action="store_true", help="expose inspection tools only and refuse mutation calls")
     s.set_defaults(fn=None)
     from agentlane.ui import DEFAULT_PORT, DEFAULT_REFRESH
     s = sub.add_parser("ui", help="serve a read-only localhost dashboard of tasks, notes and worker runs")
@@ -2034,6 +2035,7 @@ def build_parser():
     s.add_argument("--agent")
     s.add_argument("--project", action="store_true", help="add missing project files and gates without overwriting existing ones")
     s.add_argument("--no-claude-hooks", action="store_true", help="do not add Claude session and heartbeat hooks")
+    s.add_argument("--mcp-read-only", action="store_true", help="use inspection-only MCP in newly created agent configuration; existing files are preserved")
     s.set_defaults(fn=cmd_install)
 
     s = sub.add_parser("whoami", help="show the member and agent this checkout acts as")
@@ -2055,7 +2057,7 @@ def main(argv=None):
             return doctor(args)
         if args.cmd == "mcp":
             from agentlane.mcp import main as mcp_main
-            mcp_main()
+            mcp_main(read_only=args.read_only)
             return 0
         if args.cmd == "ui":
             # Read-only and long-running: it never takes the checkout lock other commands need.

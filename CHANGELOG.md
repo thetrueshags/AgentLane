@@ -17,6 +17,14 @@
 - Add Ruby/Rails gate detection, a project gate-command override and additive installed Claude hooks.
 - Pass stable task/run/member correlation variables to supervised workers and retain effective values.
 
+- Copilot installation adds missing repository instructions and an explicit VS Code workspace
+  directory. Existing client configuration and instructions are preserved.
+- `install --agent copilot-cloud` generates inspection-only administrator MCP configuration
+  for GitHub repository settings, sharing instructions with the VS Code integration.
+- Opt-in `agentlane mcp --read-only` exposes six inspection tools and rejects other calls before
+  dispatch. `install --mcp-read-only` applies it to newly generated client configuration.
+- Corporate deployment guidance covers Git permissions, credentials, execution boundaries,
+  data retention and pilot acceptance; hosted Copilot setup requires separate validation.
 - Improve the local owner dashboard with responsive navigation, snapshot guidance, linked counts,
   task filters, blockers and full approval history. Correct future expiry wording and return 404
   for missing selected worker runs without showing unrelated logs.

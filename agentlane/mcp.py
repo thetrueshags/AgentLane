@@ -98,6 +98,12 @@ TOOLS = [
      "inputSchema": {"type": "object", "required": ["name", "agent"], "properties": {"name": {"type": "string"}, "agent": {"type": "string"}}}},
 ]
 
+# Explicit allowlist: new tools stay unavailable in restricted sessions until reviewed.
+READ_ONLY_TOOLS = frozenset({
+    "board_doctor", "board_list", "board_show", "board_status",
+    "board_worker_list", "board_worker_show",
+})
+
 
 def board(argv):
     p = subprocess.run([sys.executable, "-m", "agentlane", "--json"] + argv, cwd=ROOT, text=True,
@@ -106,7 +112,9 @@ def board(argv):
     return text, p.returncode != 0
 
 
-def call(name, a):
+def call(name, a, read_only=False):
+    if read_only and (not isinstance(name, str) or name not in READ_ONLY_TOOLS):
+        return json.dumps({"ok": False, "error": "Tool unavailable in read-only MCP mode"}), True
     a = {} if a is None else a
     if not isinstance(a, dict):
         return json.dumps({"ok": False, "error": "Tool arguments must be an object"}), True
@@ -205,7 +213,7 @@ def reply(msg_id, result=None, error=None):
     sys.stdout.flush()
 
 
-def main():
+def main(read_only=False):
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -232,9 +240,9 @@ def main():
         elif method == "ping":
             reply(msg_id, {})
         elif method == "tools/list":
-            reply(msg_id, {"tools": TOOLS})
+            reply(msg_id, {"tools": [t for t in TOOLS if not read_only or t["name"] in READ_ONLY_TOOLS]})
         elif method == "tools/call":
-            text, is_error = call(params.get("name"), params.get("arguments"))
+            text, is_error = call(params.get("name"), params.get("arguments"), read_only=read_only)
             reply(msg_id, {"content": [{"type": "text", "text": text}], "isError": is_error})
         else:
             reply(msg_id, error={"code": -32601, "message": "method not found: %s" % method})

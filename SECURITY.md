@@ -16,3 +16,7 @@ AgentLane hooks coordinate cooperative workers. They are local guardrails, not a
 boundary against someone who already has permission to rewrite local hooks or repository files.
 Unexpected command execution, credential exposure, or remote writes beyond the intended
 operation should still be reported.
+
+For deployment boundaries, data handling and pilot acceptance criteria, see the
+[corporate deployment guide](docs/corporate.md). `agentlane mcp --read-only` restricts this
+server's tools; it does not sandbox the process or replace repository access controls.

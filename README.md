@@ -227,6 +227,13 @@ Claude Code, Codex, Cursor, Gemini CLI, VS Code/Copilot, OpenCode and shell agen
 and existing configurations; installed projects can launch `agentlane mcp`.
 See [integration details](docs/integrations.md).
 
+For GitHub Copilot, `agentlane install --project --agent copilot` also adds missing
+`.github/copilot-instructions.md` instructions. Add `--mcp-read-only` for an inspection-only
+pilot; existing configuration is preserved and must be adjusted manually. See
+[corporate deployment](docs/corporate.md) for permission boundaries and rollout checks.
+`agentlane install --project --agent copilot-cloud` generates an inspection-only MCP
+configuration for an administrator to apply in GitHub's Copilot settings.
+
 GitHub Actions and Slack are optional. Workflows can check landed work, recover failed landings
 when a board is present, and expire stale claims. They target `main`/`board`; adapt them for custom
 branch names. Automated writes require `AGENTLANE_AUTOMATION_TOKEN`,
