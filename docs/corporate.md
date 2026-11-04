@@ -1,9 +1,16 @@
-# Corporate deployment
+# Deployment in organizations
 
-AgentLane coordinates trusted collaborators through Git. A corporate rollout needs the
-organization's repository, endpoint and AI-provider controls in addition to these local
-guardrails. This guide supports an evaluated pilot; it is not a compliance certification
-or a claim that arbitrary agent execution is safe. See [security reporting](../SECURITY.md).
+AgentLane is one MIT-licensed open-source tool for individuals, communities and organizations.
+Its review controls, read-only MCP mode and deployment documentation are part of that same
+project and available to everyone. Start with the [standard setup](../README.md#install),
+then choose the controls that fit your project.
+
+This optional guide helps organizations evaluate AgentLane within their existing repository,
+endpoint and AI-provider policies. The approval steps below describe an organization's own
+rollout process; ordinary installation and use remain available to everyone. AgentLane
+coordinates trusted collaborators through Git. Organizations should evaluate the local
+guardrails alongside their existing controls. This guide supports an evaluated pilot and
+does not certify compliance or arbitrary agent execution. See [security reporting](../SECURITY.md).
 
 ## Permission and execution boundaries
 

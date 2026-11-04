@@ -55,7 +55,7 @@ AgentLane does not override that harness policy.
 
 ## GitHub Copilot in VS Code
 
-For a project adopting AgentLane, install the CLI from your approved source, then run:
+For a project adopting AgentLane, [install the CLI](../README.md#install), then run:
 
 ```sh
 agentlane install --project --agent copilot
@@ -68,8 +68,8 @@ merge the suggested server or instructions manually if those files already exist
 Review and commit the generated project files through your normal setup process.
 Open the worker's own clone as the VS Code workspace. The generated server sets
 `cwd` to `${workspaceFolder}`; ensure an inherited `BOARD_REPO_ROOT` does not point elsewhere.
-Allow the server through your organization's MCP policy and VS Code's trust prompts,
-then check that `board_status` returns the intended project before claiming work.
+Follow VS Code's server trust prompts and any organizational MCP policy that applies.
+Check that `board_status` returns the intended project before claiming work.
 Each simultaneous Copilot worker needs a separate clone and unique member identity.
 
 For an inspection-only pilot, create configuration with:
@@ -96,9 +96,9 @@ options rather than silently starting an unrestricted session.
 
 ## Copilot cloud agent
 
-The VS Code file does not configure Copilot on GitHub. A repository administrator must
-configure that service separately and install an approved AgentLane version in its runtime.
-Generate an inspection-only configuration for that administrator with:
+The VS Code file does not configure Copilot on GitHub. The repository owner or an administrator
+configures that service separately and installs their selected AgentLane version in its runtime.
+Generate an inspection-only configuration for the repository settings with:
 
 ```sh
 agentlane install --project --agent copilot-cloud
@@ -108,6 +108,7 @@ This adds missing `.github/copilot-instructions.md` instructions and writes
 `.harness/integrations/copilot-cloud.json`. It preserves an existing cloud configuration,
 instructions and the VS Code configuration, so both environments can coexist in one project.
 Cloud configuration always starts with `--read-only` and an explicit three-tool allowlist.
+This starting configuration applies to personal, community and organization repositories alike.
 The generated JSON is an administrator handoff artifact; GitHub does not load it from this
 path automatically. Copy its contents to the repository's Copilot MCP settings:
 
@@ -138,4 +139,5 @@ Configuration formats and service policies follow the official
 [VS Code MCP documentation](https://code.visualstudio.com/docs/agent-customization/mcp-servers),
 [Copilot repository instructions](https://docs.github.com/en/copilot/how-tos/configure-custom-instructions/add-repository-instructions)
 and [Copilot repository MCP documentation](https://docs.github.com/en/copilot/how-tos/copilot-on-github/customize-copilot/configure-mcp-servers).
-See [corporate deployment](corporate.md) for permissions, data handling and pilot acceptance.
+Organizations can use the optional [deployment guide](corporate.md) for permissions, data
+handling and pilot acceptance.

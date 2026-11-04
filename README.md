@@ -28,6 +28,12 @@ on one project. When a lane is ready, AgentLane checks it and coordinates landin
 **Your repo is the control plane.** The board lives in Git. No coordination server, database,
 hosted service, or shared agent runtime is required. Python standard library only.
 
+AgentLane is MIT-licensed open source for individuals, open-source communities and organizations.
+Use it with the agents and Git hosting that fit your project. The core workflow requires no
+AgentLane account, commercial subscription or corporate approval process. Review controls,
+read-only tools and organizational deployment guidance are available in the same open-source
+project, ready to adopt when your workflow needs them.
+
 ## See the difference
 
 Your hackathon team is building an **event check-in app before demo time**. Three human
@@ -229,8 +235,8 @@ See [integration details](docs/integrations.md).
 
 For GitHub Copilot, `agentlane install --project --agent copilot` also adds missing
 `.github/copilot-instructions.md` instructions. Add `--mcp-read-only` for an inspection-only
-pilot; existing configuration is preserved and must be adjusted manually. See
-[corporate deployment](docs/corporate.md) for permission boundaries and rollout checks.
+session; existing configuration is preserved and must be adjusted manually. Organizations can
+use the optional [deployment guide](docs/corporate.md) for permission boundaries and rollout checks.
 `agentlane install --project --agent copilot-cloud` generates an inspection-only MCP
 configuration for an administrator to apply in GitHub's Copilot settings.
 
