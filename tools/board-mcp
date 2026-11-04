@@ -7,6 +7,6 @@ sys.path.insert(0, root)
 os.environ.setdefault("BOARD_REPO_ROOT", root)
 # Child commands can run the source checkout before it has been installed.
 os.environ["PYTHONPATH"] = root + os.pathsep + os.environ.get("PYTHONPATH", "")
-from agentlane.mcp import main
+from agentlane.board import main
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main(["mcp"] + sys.argv[1:]))

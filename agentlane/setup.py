@@ -9,6 +9,7 @@ AGENTS = {
     "claude-code": ".mcp.json", "claude": ".mcp.json", "codex": ".codex/config.toml",
     "cursor": ".cursor/mcp.json", "gemini": ".gemini/settings.json", "gemini-cli": ".gemini/settings.json",
     "copilot": ".vscode/mcp.json", "vscode": ".vscode/mcp.json", "opencode": "opencode.json",
+    "copilot-cloud": ".harness/integrations/copilot-cloud.json",
 }
 
 
@@ -27,26 +28,45 @@ def install_hook(repo):
     return str(destination)
 
 
-def install_agent(repo, agent):
+def install_agent(repo, agent, read_only=False):
+    read_only = read_only or agent == "copilot-cloud"
+    instructions = ""
+    if agent in ("copilot", "vscode", "copilot-cloud"):
+        relative_instructions = ".github/copilot-instructions.md"
+        destination = Path(repo.root, relative_instructions)
+        if destination.exists():
+            instructions = " Preserved existing instructions: " + relative_instructions
+        else:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text((Path(__file__).parent / "templates/copilot-instructions.md").read_text(encoding="utf-8"),
+                                   encoding="utf-8")
+            instructions = " Created " + relative_instructions
     relative = AGENTS.get(agent)
     if not relative:
         return "Use the shell CLI and AGENTS.md (no tool-specific config needed)."
     path = Path(repo.root, relative)
     if path.exists():
-        return "Preserved existing agent configuration: " + relative
+        return ("Preserved existing agent configuration: " + relative +
+                ("; requested read-only mode was not applied. Configure mcp --read-only manually." if read_only else "") + instructions)
     path.parent.mkdir(parents=True, exist_ok=True)
+    mcp_args = ["mcp"] + (["--read-only"] if read_only else [])
     if agent == "codex":
-        path.write_text('[mcp_servers.board]\ncommand = "agentlane"\nargs = ["mcp"]\n', encoding="utf-8")
+        path.write_text('[mcp_servers.board]\ncommand = "agentlane"\nargs = ' + json.dumps(mcp_args) + '\n', encoding="utf-8")
     else:
-        server = {"command": "agentlane", "args": ["mcp"]}
+        server = {"command": "agentlane", "args": mcp_args}
         if agent in ("copilot", "vscode"):
-            config = {"servers": {"board": {"type": "stdio", **server}}}
+            config = {"servers": {"board": {"type": "stdio", **server, "cwd": "${workspaceFolder}"}}}
+        elif agent == "copilot-cloud":
+            config = {"mcpServers": {"board": {"type": "stdio", **server,
+                                             "tools": ["board_status", "board_list", "board_show"]}}}
         elif agent == "opencode":
-            config = {"mcp": {"board": {"type": "local", "command": ["agentlane", "mcp"], "enabled": True}}}
+            config = {"mcp": {"board": {"type": "local", "command": ["agentlane"] + mcp_args, "enabled": True}}}
         else:
             config = {"mcpServers": {"board": server}}
         core.write_json(str(path), config)
-    return "Created " + relative
+    return ("Created " + relative + instructions +
+            (" Copy the MCP JSON to GitHub repository settings; it is not loaded automatically."
+             if agent == "copilot-cloud" else ""))
 
 
 def install_claude_hooks(repo):
@@ -98,7 +118,7 @@ def install(args, repo):
         if "member.json" not in existing.splitlines():
             ignore.write_text(existing.rstrip() + "\nmember.json\n", encoding="utf-8")
     hook = install_hook(repo)
-    integration = install_agent(repo, args.agent or repo.agent)
+    integration = install_agent(repo, args.agent or repo.agent, read_only=args.mcp_read_only)
     if args.project and (args.agent or repo.agent) in ("claude", "claude-code") and not args.no_claude_hooks:
         install_claude_hooks(repo)
     if args.name or args.agent:
