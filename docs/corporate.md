@@ -2,7 +2,7 @@
 
 AgentLane is one MIT-licensed open-source tool for individuals, communities and organizations.
 Its review controls, read-only MCP mode and deployment documentation are part of that same
-project and available to everyone. Start with the [standard setup](../README.md#install),
+project and available to everyone. Start with the [standard setup](../README.md#get-started),
 then choose the controls that fit your project.
 
 This optional guide helps organizations evaluate AgentLane within their existing repository,
@@ -17,7 +17,7 @@ does not certify compliance or arbitrary agent execution. See [security reportin
 | Surface | AgentLane behavior | Deployment control |
 | --- | --- | --- |
 | Git access | Uses the process's existing Git credentials; board state is on a Git branch | SSO and scoped credentials; restrict repository and branch writes on the server |
-| Worker names | Local member names label claims and approval history | Do not treat names as authenticated corporate identities; require host-enforced reviewer identities |
+| Worker names | Self-selected names by default; optional GitHub-bound identities | Choose identity policy for the project and require host-enforced reviewer identities |
 | Hooks and claims | Local coordination checks for cooperative workers | Branch protection/rulesets, required checks and reviews; prevent bypass and force pushes |
 | Gates | Project-controlled Bash scripts execute with caller privileges | Review gate changes; run builds on isolated endpoints/CI without production credentials |
 | MCP | Stdio child process with inherited OS access and credentials | Approved executable/version, MCP allowlist and endpoint isolation; start with `--read-only` |
@@ -54,7 +54,11 @@ untrusted input, and keep policy changes behind review.
 5. Before enabling write tools, choose a landing model. On GitHub, set
    `"landing_mode": "pr"` in `.harness/config.json`, require server-side reviews/checks,
    and validate PR creation using the pilot identity. Task completion follows a verified
-   merge and `agentlane sync --reviews`. For direct landing, validate atomic-push support,
+   merge and `agentlane sync --reviews`. Commit policy through the required review process;
+   policy on target main governs worker landings. If GitHub-bound member identity is needed,
+   opt in with `"identity_mode": "github"` and register authenticated GitHub logins. The
+   default `"self"` mode remains available for projects using other Git hosts.
+   For direct landing, validate atomic-push support,
    branch restrictions and the optional independent review policy. That local policy is
    incompatible with PR mode and does not replace host authentication.
 6. Test recovery and operational ownership: expired claims, handoff, failed gates, rejected
@@ -80,7 +84,8 @@ contain sensitive content. Inspect all of these before sharing evidence. Disable
 integrations unless approved and restrict local evidence with endpoint ACLs. Define retention
 for local receipts/logs and Git history; deleting a note in the latest commit does not erase
 older commits or other clones. Rotate exposed secrets and use the organization's Git-history
-remediation procedure. Export required audit evidence to an access-controlled external system;
+remediation procedure. Use `agentlane export --out <new-directory>` to collect committed board
+history and its hash manifest, then retain the bundle in an access-controlled external system;
 Git author metadata and AgentLane member names do not provide non-repudiation.
 
 ## Acceptance evidence

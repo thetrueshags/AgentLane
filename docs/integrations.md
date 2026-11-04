@@ -55,7 +55,7 @@ AgentLane does not override that harness policy.
 
 ## GitHub Copilot in VS Code
 
-For a project adopting AgentLane, [install the CLI](../README.md#install), then run:
+For a project adopting AgentLane, [install the CLI](../README.md#get-started), then run:
 
 ```sh
 agentlane install --project --agent copilot
@@ -90,6 +90,9 @@ data and refresh AgentLane's local board worktree; they do not publish task chan
 claim work, run gates or land code. Diagnostics may contact configured Git remotes or
 check existing GitHub authentication. This is a tool restriction, not an OS sandbox or
 a restriction on the client's separate terminal tools.
+`board_export` stays outside this inspection-only allowlist because it writes a bundle to a
+caller-selected local directory. Evidence export remains available through the CLI or a full
+MCP session.
 For source-checkout configurations using `tools/board-mcp`, append `--read-only` to the
 launcher's arguments. The compatibility launcher honors the same flag and rejects unknown
 options rather than silently starting an unrestricted session.
